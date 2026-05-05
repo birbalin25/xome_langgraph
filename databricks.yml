@@ -5,16 +5,39 @@ resources:
   apps:
     agent_xome_campaign:
       name: "agent-xome-campaign"
-      description: "Xome Campaign Platform — personalized real estate email campaigns"
+      description: "Xome Agentic Email & Personalized Communication Platform"
       source_code_path: ./
       config:
         command: ["uv", "run", "start-server"]
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "databricks"
+          - name: MLFLOW_REGISTRY_URI
+            value: "databricks-uc"
+          - name: MLFLOW_EXPERIMENT_ID
+            value_from: "experiment"
 
       resources:
+        - name: "experiment"
+          experiment:
+            experiment_id: "${resources.experiments.xome_experiment.id}"
+            permission: "CAN_MANAGE"
+
         - name: "sql_warehouse"
           sql_warehouse:
             id: "1f01d0f9de5b5108"
             permission: "CAN_USE"
+
+        # Uncomment after creating the Genie Space and setting the ID
+        - name: "genie_space"
+          genie_space:
+            name: "Xome Real Estate Analytics"
+            space_id: "01f1484fd22e1d558c5ed706de7b522d"
+            permission: "CAN_RUN"
+
+  experiments:
+    xome_experiment:
+      name: "/Users/${workspace.current_user.userName}/xome_campaign-${bundle.target}"
 
   jobs:
     xome_setup_pipeline:

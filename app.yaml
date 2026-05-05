@@ -1,3 +1,11 @@
 command: ["uv", "run", "start-server"]
-# Single-process: FastAPI on port 8000 serves both REST API and built frontend static files
+# Single-process: FastAPI on port 8000 serves both API and built frontend static files
 # frontend/dist/ is pre-built and included in the bundle
+
+env:
+  - name: MLFLOW_TRACKING_URI
+    value: "databricks"
+  - name: MLFLOW_REGISTRY_URI
+    value: "databricks-uc"
+  - name: MLFLOW_EXPERIMENT_ID
+    valueFrom: "experiment"
