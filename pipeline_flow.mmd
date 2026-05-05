@@ -1,83 +1,156 @@
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#d4edda','primaryTextColor':'#000','primaryBorderColor':'#28a745','lineColor':'#6c757d','secondaryColor':'#cfe2ff','tertiaryColor':'#fff3cd','noteBkgColor':'#f8f9fa','noteTextColor':'#000','noteBorderColor':'#dee2e6'}}}%%
-
 flowchart TB
-    %% Start/End
-    START([START: User Chat Input]):::startEnd
-    END([END: Campaign Email Output]):::startEnd
-
-    %% Data Stores
-    USERS[(Delta Table:<br/>users)]:::dataStore
-    RECS[(Delta Table:<br/>recommendations<br/>JOIN properties)]:::dataStore
-    BROWSE[(Delta Table:<br/>browsing_activity<br/>JOIN properties)]:::dataStore
-    LLM1{{Claude Sonnet 4.6<br/>Parse & Extract}}:::llm
-    LLM2{{Claude Sonnet 4.6<br/>Generate Email}}:::llm
-
-    %% Success Path Nodes
-    PROCESS[process_input<br/>---<br/>Parse user message<br/>Extract user_id<br/>Tool: get_user_profile]:::success
-    RETRIEVE[retrieve_candidates<br/>---<br/>Fetch candidate properties<br/>Tool: get_recommendations<br/>Source: recommendations table ONLY]:::success
-    RANK[rank_and_select<br/>---<br/>Sort by recommendation_score<br/>Pick Top 5 properties]:::success
-    ENRICH[enrich_context<br/>---<br/>Personalization data<br/>Tool: get_browsing_context]:::success
-    GENERATE[generate_email<br/>---<br/>Invoke LLM with prompt<br/>Output formatted campaign email]:::success
-
-    %% Error Handler
-    ERROR[handle_error<br/>---<br/>Handle pipeline errors<br/>• No user_id<br/>• User not found<br/>• No candidates]:::error
-
-    %% State Flow Annotations
-    STATE1["State: messages"]:::state
-    STATE2["State: messages,<br/>user_profile"]:::state
-    STATE3["State: messages, user_profile,<br/>candidate_properties"]:::state
-    STATE4["State: messages, user_profile,<br/>candidate_properties,<br/>top_5_properties"]:::state
-    STATE5["State: messages, user_profile,<br/>candidate_properties,<br/>top_5_properties,<br/>browsing_context"]:::state
-    STATE6["State: messages, user_profile,<br/>candidate_properties,<br/>top_5_properties,<br/>browsing_context,<br/>campaign_email"]:::state
-    STATEERR["State: error"]:::state
-
-    %% Flow
-    START --> STATE1
-    STATE1 --> PROCESS
-
-    %% process_input connections
-    PROCESS <-.Query.-> USERS
-    PROCESS <-.LLM Call.-> LLM1
-
-    %% Success path from process_input
-    PROCESS -->|Valid user<br/>profile found| STATE2
-    STATE2 --> RETRIEVE
-
-    %% Error path from process_input
-    PROCESS -->|No user_id or<br/>user not found| STATEERR
-    STATEERR --> ERROR
-
-    %% retrieve_candidates connections
-    RETRIEVE <-.Query.-> RECS
-
-    %% Success path from retrieve_candidates
-    RETRIEVE -->|Candidates<br/>found| STATE3
-    STATE3 --> RANK
-
-    %% Error path from retrieve_candidates
-    RETRIEVE -->|No candidates| ERROR
-
-    %% rank_and_select flow
-    RANK --> STATE4
-    STATE4 --> ENRICH
-
-    %% enrich_context connections
-    ENRICH <-.Query.-> BROWSE
-    ENRICH --> STATE5
-    STATE5 --> GENERATE
-
-    %% generate_email connections
-    GENERATE <-.LLM Call.-> LLM2
-    GENERATE --> STATE6
-    STATE6 --> END
-
-    %% Error to end
-    ERROR --> END
-
     %% Styling
-    classDef startEnd fill:#e9ecef,stroke:#495057,stroke-width:3px,color:#000
-    classDef success fill:#d4edda,stroke:#28a745,stroke-width:2px,color:#000
-    classDef error fill:#f8d7da,stroke:#dc3545,stroke-width:2px,color:#000
-    classDef dataStore fill:#cfe2ff,stroke:#0d6efd,stroke-width:2px,color:#000
-    classDef llm fill:#e0cffc,stroke:#6f42c1,stroke-width:2px,color:#000
-    classDef state fill:#fff3cd,stroke:#ffc107,stroke-width:1px,color:#000,font-size:10px
+    classDef frontend fill:#4ade80,stroke:#22c55e,stroke-width:2px,color:#000
+    classDef api fill:#3b82f6,stroke:#2563eb,stroke-width:2px,color:#fff
+    classDef llm fill:#a855f7,stroke:#9333ea,stroke-width:2px,color:#fff
+    classDef data fill:#7dd3fc,stroke:#0ea5e9,stroke-width:2px,color:#000
+    classDef shared fill:#fbbf24,stroke:#f59e0b,stroke-width:2px,color:#000
+    classDef container fill:#e5e7eb,stroke:#9ca3af,stroke-width:3px,color:#000
+
+    %% Deployment Container
+    subgraph DATABRICKS["Databricks App (Port 8000)"]
+        direction TB
+
+        %% Frontend Section
+        subgraph FRONTEND["Frontend: React + Vite + TailwindCSS"]
+            direction TB
+            UI1[Filter Panel<br/>City, State, Price, Type, Segment]:::frontend
+            UI2[Search Users Button]:::frontend
+            UI3[User Dropdown<br/>Top 20 Matching Users]:::frontend
+            UI4[User Profile Card]:::frontend
+            UI5[Property Grid<br/>5 Zillow-style Cards<br/>Image, Price, Beds/Baths, Score]:::frontend
+            UI6[Generate Email Button]:::frontend
+            UI7[Email Preview Panel<br/>HTML/Plain Text Tabs<br/>View Property Details Links]:::frontend
+            UI8[Save to Volume Button]:::frontend
+            UI9[Property Detail Modal<br/>Popup from Email Links]:::frontend
+
+            UI1 --> UI2
+            UI2 --> UI3
+            UI3 --> UI4
+            UI4 --> UI5
+            UI5 --> UI6
+            UI6 --> UI7
+            UI7 --> UI9
+            UI7 --> UI8
+        end
+
+        %% Backend Path 1: REST API
+        subgraph REST_API["Backend Path 1: Campaign REST API (/api/campaign)"]
+            direction TB
+            API1[GET /filters<br/>Distinct cities, states, types]:::api
+            API2[POST /users<br/>Top 20 users matching filters<br/>JOIN recommendations]:::api
+            API3[GET /users/:id/profile<br/>Full user profile]:::api
+            API4[POST /users/:id/listings<br/>Top 5 recommended properties<br/>JOIN recommendations + properties]:::api
+            API5[POST /generate-email<br/>email_generator.py]:::api
+            API6[POST /save-email<br/>WorkspaceClient.files.upload]:::api
+        end
+
+        %% Backend Path 2: LangGraph Agent
+        subgraph AGENT["Backend Path 2: LangGraph Agent (/invocations)"]
+            direction TB
+            AGENT1[MLflow AgentServer<br/>StateGraph Entry Point]:::api
+            AGENT2[Node 1: process_input<br/>Claude extracts user_id<br/>Fetch user profile]:::api
+            AGENT3[Node 2: retrieve_candidates<br/>recommendations JOIN properties<br/>City/State filter]:::api
+            AGENT4[Node 3: rank_and_select<br/>Sort by score, pick top 5]:::api
+            AGENT5[Node 4: enrich_context<br/>browsing_activity JOIN properties]:::api
+            AGENT6[Node 5: generate_email<br/>email_generator.py]:::api
+            AGENT_ERR[handle_error<br/>Missing user_id, Not found, No candidates]:::api
+
+            AGENT1 --> AGENT2
+            AGENT2 --> AGENT3
+            AGENT3 --> AGENT4
+            AGENT4 --> AGENT5
+            AGENT5 --> AGENT6
+            AGENT2 -.->|error| AGENT_ERR
+            AGENT3 -.->|error| AGENT_ERR
+        end
+
+        %% Shared Components
+        subgraph SHARED["Shared Components"]
+            direction TB
+            SHARED1[email_generator.py<br/>build_properties_section<br/>build_browsing_section<br/>format_email_prompt<br/>generate_campaign_email<br/>parse_email_response]:::shared
+            SHARED2[_execute_sql<br/>Databricks SQL Warehouse<br/>ID: 1f01d0f9de5b5108]:::shared
+            SHARED3[config.py<br/>CATALOG, SCHEMA, VOLUME_NAME<br/>LLM_ENDPOINT]:::shared
+        end
+
+        %% Static File Serving
+        STATIC[FastAPI Static Files<br/>Serves Pre-built React App]:::api
+    end
+
+    %% AI/LLM Layer
+    subgraph LLM_LAYER["AI/LLM Layer"]
+        direction LR
+        LLM1[Claude Sonnet 4.6<br/>databricks-claude-sonnet-4-6<br/>Foundation Model API]:::llm
+        LLM_USE1[User ID Extraction<br/>Agent Path]:::llm
+        LLM_USE2[Email Generation<br/>Both Paths]:::llm
+
+        LLM1 --> LLM_USE1
+        LLM1 --> LLM_USE2
+    end
+
+    %% Data Layer
+    subgraph DATA_LAYER["Data Layer: Unity Catalog (serverless_stable_14ey07_catalog.xome)"]
+        direction TB
+
+        subgraph DELTA["Delta Tables"]
+            direction LR
+            TBL1[users<br/>500 rows<br/>PK: user_id<br/>Buyer profiles, preferences, budget, segment]:::data
+            TBL2[properties<br/>1,000 rows<br/>PK: property_id<br/>Listings, price, beds, baths, sqft, images, auction]:::data
+            TBL3[browsing_activity<br/>10,000 rows<br/>PK: activity_id<br/>FK: user_id, property_id<br/>Click/view/save history]:::data
+            TBL4[recommendations<br/>5,000 rows<br/>PK: recommendation_id<br/>FK: user_id, property_id<br/>ML-scored matches]:::data
+
+            TBL3 -->|FK| TBL1
+            TBL3 -->|FK| TBL2
+            TBL4 -->|FK| TBL1
+            TBL4 -->|FK| TBL2
+        end
+
+        VOL[UC Volume: campaign_emails<br/>Saved email .txt files]:::data
+    end
+
+    %% Frontend to REST API connections
+    UI2 -->|HTTP POST| API2
+    UI1 -->|HTTP GET| API1
+    UI4 -->|HTTP GET| API3
+    UI5 -->|HTTP POST| API4
+    UI6 -->|HTTP POST| API5
+    UI8 -->|HTTP POST| API6
+
+    %% User to Static Files
+    USER[User Browser]:::frontend --> STATIC
+    STATIC --> FRONTEND
+
+    %% REST API to Shared
+    API1 --> SHARED2
+    API2 --> SHARED2
+    API3 --> SHARED2
+    API4 --> SHARED2
+    API5 --> SHARED1
+    API6 --> SHARED3
+
+    %% Agent to Shared
+    AGENT2 --> SHARED2
+    AGENT3 --> SHARED2
+    AGENT4 --> SHARED2
+    AGENT5 --> SHARED2
+    AGENT6 --> SHARED1
+    AGENT1 --> SHARED3
+    AGENT2 --> LLM_USE1
+    AGENT6 --> LLM_USE2
+    API5 --> LLM_USE2
+
+    %% Shared to Data
+    SHARED2 --> TBL1
+    SHARED2 --> TBL2
+    SHARED2 --> TBL3
+    SHARED2 --> TBL4
+    API6 --> VOL
+
+    %% Styling subgraphs
+    class DATABRICKS container
+    class FRONTEND frontend
+    class REST_API api
+    class AGENT api
+    class SHARED shared
+    class LLM_LAYER llm
+    class DATA_LAYER data

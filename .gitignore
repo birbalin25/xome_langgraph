@@ -15,6 +15,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+!frontend/dist/
 downloads/
 eggs/
 .eggs/
@@ -219,3 +220,6 @@ sketch
 
 **/.env
 **/.env.local
+
+# Frontend build artifacts
+frontend/node_modules/

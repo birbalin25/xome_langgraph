@@ -17,7 +17,6 @@ See 'uv run start-server --help' for available options.
 import argparse
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -28,7 +27,7 @@ from dotenv import load_dotenv
 
 # Readiness patterns
 BACKEND_READY = [r"Uvicorn running on", r"Application startup complete", r"Started server process"]
-FRONTEND_READY = [r"Server is running on http://localhost"]
+FRONTEND_READY = [r"Server is running on http://localhost", r"Local:\s+http://localhost"]
 
 
 class ProcessManager:
@@ -76,38 +75,15 @@ class ProcessManager:
             print(f"Error monitoring {name}: {e}")
             self.failed.set()
 
-    def clone_frontend_if_needed(self):
-        if Path("e2e-chatbot-app-next").exists():
-            return True
-
-        print("Cloning e2e-chatbot-app-next...")
-        for url in [
-            "https://github.com/databricks/app-templates.git",
-            "git@github.com:databricks/app-templates.git",
-        ]:
-            try:
-                subprocess.run(
-                    ["git", "clone", "--filter=blob:none", "--sparse", url, "temp-app-templates"],
-                    check=True,
-                    capture_output=True,
-                )
-                break
-            except subprocess.CalledProcessError:
-                continue
-        else:
-            print("ERROR: Failed to clone repository.")
-            print(
-                "Manually download from: https://download-directory.github.io/?url=https://github.com/databricks/app-templates/tree/main/e2e-chatbot-app-next"
-            )
+    def check_frontend_exists(self):
+        frontend_dir = Path("frontend")
+        if not frontend_dir.exists():
+            print("ERROR: frontend/ directory not found.")
+            print("Make sure the custom frontend has been created in the project root.")
             return False
-
-        subprocess.run(
-            ["git", "sparse-checkout", "set", "e2e-chatbot-app-next"],
-            cwd="temp-app-templates",
-            check=True,
-        )
-        Path("temp-app-templates/e2e-chatbot-app-next").rename("e2e-chatbot-app-next")
-        shutil.rmtree("temp-app-templates", ignore_errors=True)
+        if not (frontend_dir / "package.json").exists():
+            print("ERROR: frontend/package.json not found.")
+            return False
         return True
 
     def start_process(self, cmd, name, log_file, patterns, cwd=None):
@@ -153,11 +129,8 @@ class ProcessManager:
     def run(self, backend_args=None):
         load_dotenv(dotenv_path=".env", override=True)
 
-        if not self.clone_frontend_if_needed():
+        if not self.check_frontend_exists():
             return 1
-
-        # Set API_PROXY environment variable for frontend to connect to backend
-        os.environ["API_PROXY"] = f"http://localhost:{self.port}/invocations"
 
         # Open log files
         self.backend_log = open("backend.log", "w", buffering=1)
@@ -175,18 +148,17 @@ class ProcessManager:
             )
 
             # Setup and start frontend
-            frontend_dir = Path("e2e-chatbot-app-next")
-            for cmd, desc in [("npm install", "install"), ("npm run build", "build")]:
-                print(f"Running npm {desc}...")
-                result = subprocess.run(
-                    cmd.split(), cwd=frontend_dir, capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    print(f"npm {desc} failed: {result.stderr}")
-                    return 1
+            frontend_dir = Path("frontend")
+            print("Running npm install...")
+            result = subprocess.run(
+                ["npm", "install"], cwd=frontend_dir, capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                print(f"npm install failed: {result.stderr}")
+                return 1
 
             self.frontend_process = self.start_process(
-                ["npm", "run", "start"],
+                ["npm", "run", "dev"],
                 "frontend",
                 self.frontend_log,
                 FRONTEND_READY,

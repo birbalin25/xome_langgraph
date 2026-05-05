@@ -17,7 +17,8 @@ from mlflow.types.responses import (
 )
 
 from agent_server.config import GENIE_SPACE_ID, LLM_ENDPOINT
-from agent_server.prompts import EMAIL_GENERATION_PROMPT, SYSTEM_PROMPT
+from agent_server.email_generator import build_browsing_section, build_properties_section, format_email_prompt
+from agent_server.prompts import SYSTEM_PROMPT
 from agent_server.tools import get_browsing_context, get_recommendations, get_user_profile
 from agent_server.utils import (
     get_databricks_host_from_env,
@@ -185,58 +186,7 @@ async def generate_email(state: CampaignState) -> dict:
     top_5 = state.get("top_5_properties", [])
     browsing = state.get("browsing_context", [])
 
-    # Build properties section
-    properties_lines = []
-    for i, prop in enumerate(top_5, 1):
-        status = prop.get("listing_status", "active").upper()
-        line = f"""
-**Property {i}: {prop.get('address', 'N/A')}**
-- Location: {prop.get('neighborhood', 'N/A')}, {prop.get('city', 'N/A')}, {prop.get('state', 'N/A')} {prop.get('zip_code', '')}
-- Price: ${int(float(prop.get('price', 0))):,}
-- Details: {prop.get('beds', 'N/A')} beds / {prop.get('baths', 'N/A')} baths / {int(float(prop.get('sqft', 0))):,} sqft
-- Type: {prop.get('property_type', 'N/A')} | Year Built: {prop.get('year_built', 'N/A')}
-- School Rating: {prop.get('school_rating', 'N/A')}/10
-- Status: [{status}]
-- Days on Market: {prop.get('days_on_market', 'N/A')}
-- HOA Fee: ${prop.get('hoa_fee', 0)}/mo"""
-
-        if status == "AUCTION":
-            line += f"""
-- AUCTION DATE: {prop.get('auction_date', 'TBD')}
-- AUCTION STARTING PRICE: ${int(float(prop.get('auction_start_price', 0))):,}"""
-
-        line += f"""
-- Recommendation Score: {prop.get('recommendation_score', 'N/A')}
-- Why Recommended: {prop.get('recommendation_reason', 'N/A')}
-- Description: {prop.get('description', 'N/A')}"""
-        properties_lines.append(line)
-
-    properties_section = "\n".join(properties_lines) if properties_lines else "No properties available."
-
-    # Build browsing section
-    browsing_lines = []
-    for b in browsing[:10]:
-        browsing_lines.append(
-            f"- [{b.get('activity_type', 'unknown')}] {b.get('address', 'N/A')} in {b.get('city', 'N/A')} "
-            f"({b.get('property_type', 'N/A')}, ${int(float(b.get('price', 0))):,}) — {b.get('activity_timestamp', 'N/A')}"
-        )
-    browsing_section = "\n".join(browsing_lines) if browsing_lines else "No recent browsing activity."
-
-    # Format the email generation prompt
-    prompt = EMAIL_GENERATION_PROMPT.format(
-        first_name=profile.get("first_name", ""),
-        last_name=profile.get("last_name", ""),
-        email=profile.get("email", ""),
-        user_segment=profile.get("user_segment", ""),
-        preferred_city=profile.get("preferred_city", ""),
-        preferred_state=profile.get("preferred_state", ""),
-        budget_min=int(float(profile.get("budget_min", 0))),
-        budget_max=int(float(profile.get("budget_max", 0))),
-        preferred_property_type=profile.get("preferred_property_type", ""),
-        preferred_beds_min=profile.get("preferred_beds_min", ""),
-        properties_section=properties_section,
-        browsing_section=browsing_section,
-    )
+    prompt = format_email_prompt(profile, top_5, browsing)
 
     llm = get_llm()
     response = await llm.ainvoke([
@@ -246,7 +196,6 @@ async def generate_email(state: CampaignState) -> dict:
 
     email_content = response.content
 
-    # Build a user-facing summary message
     summary = f"""Campaign email generated for **{profile.get('first_name', '')} {profile.get('last_name', '')}** ({profile.get('email', '')}).
 
 **Segment:** {profile.get('user_segment', '')}
