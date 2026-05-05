@@ -2,40 +2,35 @@
 
 ## Project Overview
 
-Xome Campaign Platform — an AI-powered real estate campaign tool that generates personalized emails promoting recommended properties to high-intent buyers. Built with LangGraph + FastAPI backend, React + TailwindCSS frontend, deployed as a single-process Databricks App.
+Xome Campaign Platform — an AI-powered real estate campaign tool that generates personalized emails promoting recommended properties to high-intent buyers. Built with FastAPI backend, React + TailwindCSS frontend, deployed as a single-process Databricks App.
 
 ## Key Paths
 
-- Backend API + agent: `agent_server/`
-- Shared email logic: `agent_server/email_generator.py`
+- Backend: `agent_server/`
 - REST API router: `agent_server/campaign_api.py`
-- LangGraph agent: `agent_server/agent.py`
+- Email generation logic: `agent_server/email_generator.py`
+- LLM setup: `agent_server/agent.py`
+- SQL helper: `agent_server/tools.py`
 - Server entry point: `agent_server/start_server.py`
 - Frontend (React): `frontend/`
 - Frontend components: `frontend/src/components/`
 - API client: `frontend/src/api/campaign.ts`
 - Data generation: `notebooks/01_generate_data.py`
-- Genie queries: `notebooks/02_genie_setup_instructions.py`
 - Deployment: `databricks.yml`, `app.yaml`
 
 ## Architecture
 
 ```
-Browser → FastAPI (port 8000) → serves frontend/dist/ (static) + REST API + LangGraph agent
+Browser → FastAPI (port 8000) → serves frontend/dist/ (static) + REST API (/api/campaign/*)
                                      │
                           ┌──────────┼──────────┐
                           ▼          ▼          ▼
                     Claude LLM   Delta Tables  UC Volume
 ```
 
-**Two paths to generate emails, both using shared `email_generator.py`:**
+**Call chain:** `React UI → campaign_api.py → email_generator.py → Claude LLM`
 
-1. **Dashboard UI** → `campaign_api.py` (REST endpoints) → `email_generator.py` → Claude LLM
-2. **Chat agent** → `agent.py` (LangGraph 5-node pipeline) → `email_generator.py` → Claude LLM
-
-LangGraph pipeline: `process_input → retrieve_candidates → rank_and_select → enrich_context → generate_email`
-
-**Single-process deployment:** FastAPI on port 8000 serves both the pre-built React frontend (from `frontend/dist/`) and all API endpoints. `enable_chat_proxy=False` in AgentServer. Databricks Apps only exposes port 8000.
+**Single-process deployment:** FastAPI on port 8000 serves both the pre-built React frontend (from `frontend/dist/`) and all API endpoints. Databricks Apps only exposes port 8000.
 
 ## Critical Rules
 
@@ -50,7 +45,6 @@ LangGraph pipeline: `process_input → retrieve_candidates → rank_and_select �
 - Workspace: fevm (`https://fevm-serverless-stable-14ey07.cloud.databricks.com`)
 - SQL Warehouse: `1f01d0f9de5b5108`
 - LLM: `databricks-claude-sonnet-4-6`
-- Genie Space: `01f1484fd22e1d558c5ed706de7b522d`
 - UC Volume: `campaign_emails`
 - App URL: `https://agent-xome-campaign-7474645414452466.aws.databricksapps.com`
 
@@ -97,12 +91,12 @@ databricks apps logs agent-xome-campaign --profile fevm
 
 ## Dependencies
 
-**Backend:** `fastapi`, `databricks-langchain`, `mlflow>=3.10.0`, `langgraph`, `langchain-mcp-adapters`, `python-dotenv`. Data gen uses `faker`.
+**Backend:** `fastapi`, `uvicorn`, `databricks-langchain`, `databricks-sdk`, `python-dotenv`. Data gen uses `faker`.
 
 **Frontend:** `react`, `vite`, `tailwindcss`, `lucide-react`, `typescript`.
 
 ## Known Deployment Notes
 
-- `enable_chat_proxy` must be `False` in `start_server.py` — when `True`, it intercepts all GET requests and proxies to a non-existent port 3000, causing 503 errors.
+- Frontend must be built before deploy — `frontend/dist/` is served as static files by FastAPI.
 - `frontend/dist/` must be included in bundle deploy — the `!frontend/dist/` exception in `.gitignore` overrides the global `dist/` exclusion pattern.
 - npm registry: `.npmrc` in `frontend/` points to `https://registry.npmmirror.com` for corporate network compatibility.
