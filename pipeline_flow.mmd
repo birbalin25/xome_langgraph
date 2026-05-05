@@ -1,0 +1,83 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#d4edda','primaryTextColor':'#000','primaryBorderColor':'#28a745','lineColor':'#6c757d','secondaryColor':'#cfe2ff','tertiaryColor':'#fff3cd','noteBkgColor':'#f8f9fa','noteTextColor':'#000','noteBorderColor':'#dee2e6'}}}%%
+
+flowchart TB
+    %% Start/End
+    START([START: User Chat Input]):::startEnd
+    END([END: Campaign Email Output]):::startEnd
+
+    %% Data Stores
+    USERS[(Delta Table:<br/>users)]:::dataStore
+    RECS[(Delta Table:<br/>recommendations<br/>JOIN properties)]:::dataStore
+    BROWSE[(Delta Table:<br/>browsing_activity<br/>JOIN properties)]:::dataStore
+    LLM1{{Claude Sonnet 4.6<br/>Parse & Extract}}:::llm
+    LLM2{{Claude Sonnet 4.6<br/>Generate Email}}:::llm
+
+    %% Success Path Nodes
+    PROCESS[process_input<br/>---<br/>Parse user message<br/>Extract user_id<br/>Tool: get_user_profile]:::success
+    RETRIEVE[retrieve_candidates<br/>---<br/>Fetch candidate properties<br/>Tool: get_recommendations<br/>Source: recommendations table ONLY]:::success
+    RANK[rank_and_select<br/>---<br/>Sort by recommendation_score<br/>Pick Top 5 properties]:::success
+    ENRICH[enrich_context<br/>---<br/>Personalization data<br/>Tool: get_browsing_context]:::success
+    GENERATE[generate_email<br/>---<br/>Invoke LLM with prompt<br/>Output formatted campaign email]:::success
+
+    %% Error Handler
+    ERROR[handle_error<br/>---<br/>Handle pipeline errors<br/>• No user_id<br/>• User not found<br/>• No candidates]:::error
+
+    %% State Flow Annotations
+    STATE1["State: messages"]:::state
+    STATE2["State: messages,<br/>user_profile"]:::state
+    STATE3["State: messages, user_profile,<br/>candidate_properties"]:::state
+    STATE4["State: messages, user_profile,<br/>candidate_properties,<br/>top_5_properties"]:::state
+    STATE5["State: messages, user_profile,<br/>candidate_properties,<br/>top_5_properties,<br/>browsing_context"]:::state
+    STATE6["State: messages, user_profile,<br/>candidate_properties,<br/>top_5_properties,<br/>browsing_context,<br/>campaign_email"]:::state
+    STATEERR["State: error"]:::state
+
+    %% Flow
+    START --> STATE1
+    STATE1 --> PROCESS
+
+    %% process_input connections
+    PROCESS <-.Query.-> USERS
+    PROCESS <-.LLM Call.-> LLM1
+
+    %% Success path from process_input
+    PROCESS -->|Valid user<br/>profile found| STATE2
+    STATE2 --> RETRIEVE
+
+    %% Error path from process_input
+    PROCESS -->|No user_id or<br/>user not found| STATEERR
+    STATEERR --> ERROR
+
+    %% retrieve_candidates connections
+    RETRIEVE <-.Query.-> RECS
+
+    %% Success path from retrieve_candidates
+    RETRIEVE -->|Candidates<br/>found| STATE3
+    STATE3 --> RANK
+
+    %% Error path from retrieve_candidates
+    RETRIEVE -->|No candidates| ERROR
+
+    %% rank_and_select flow
+    RANK --> STATE4
+    STATE4 --> ENRICH
+
+    %% enrich_context connections
+    ENRICH <-.Query.-> BROWSE
+    ENRICH --> STATE5
+    STATE5 --> GENERATE
+
+    %% generate_email connections
+    GENERATE <-.LLM Call.-> LLM2
+    GENERATE --> STATE6
+    STATE6 --> END
+
+    %% Error to end
+    ERROR --> END
+
+    %% Styling
+    classDef startEnd fill:#e9ecef,stroke:#495057,stroke-width:3px,color:#000
+    classDef success fill:#d4edda,stroke:#28a745,stroke-width:2px,color:#000
+    classDef error fill:#f8d7da,stroke:#dc3545,stroke-width:2px,color:#000
+    classDef dataStore fill:#cfe2ff,stroke:#0d6efd,stroke-width:2px,color:#000
+    classDef llm fill:#e0cffc,stroke:#6f42c1,stroke-width:2px,color:#000
+    classDef state fill:#fff3cd,stroke:#ffc107,stroke-width:1px,color:#000,font-size:10px
