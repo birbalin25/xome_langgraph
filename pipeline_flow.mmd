@@ -34,8 +34,8 @@ flowchart TB
             UI7 --> UI8
         end
 
-        %% Backend Path 1: REST API
-        subgraph REST_API["Backend Path 1: Campaign REST API (/api/campaign)"]
+        %% Backend: REST API
+        subgraph REST_API["Backend: Campaign REST API (/api/campaign)"]
             direction TB
             API1[GET /filters<br/>Distinct cities, states, types]:::api
             API2[POST /users<br/>Top 20 users matching filters<br/>JOIN recommendations]:::api
@@ -43,26 +43,6 @@ flowchart TB
             API4[POST /users/:id/listings<br/>Top 5 recommended properties<br/>JOIN recommendations + properties]:::api
             API5[POST /generate-email<br/>email_generator.py]:::api
             API6[POST /save-email<br/>WorkspaceClient.files.upload]:::api
-        end
-
-        %% Backend Path 2: LangGraph Agent
-        subgraph AGENT["Backend Path 2: LangGraph Agent (/invocations)"]
-            direction TB
-            AGENT1[MLflow AgentServer<br/>StateGraph Entry Point]:::api
-            AGENT2[Node 1: process_input<br/>Claude extracts user_id<br/>Fetch user profile]:::api
-            AGENT3[Node 2: retrieve_candidates<br/>recommendations JOIN properties<br/>City/State filter]:::api
-            AGENT4[Node 3: rank_and_select<br/>Sort by score, pick top 5]:::api
-            AGENT5[Node 4: enrich_context<br/>browsing_activity JOIN properties]:::api
-            AGENT6[Node 5: generate_email<br/>email_generator.py]:::api
-            AGENT_ERR[handle_error<br/>Missing user_id, Not found, No candidates]:::api
-
-            AGENT1 --> AGENT2
-            AGENT2 --> AGENT3
-            AGENT3 --> AGENT4
-            AGENT4 --> AGENT5
-            AGENT5 --> AGENT6
-            AGENT2 -.->|error| AGENT_ERR
-            AGENT3 -.->|error| AGENT_ERR
         end
 
         %% Shared Components
@@ -81,11 +61,9 @@ flowchart TB
     subgraph LLM_LAYER["AI/LLM Layer"]
         direction LR
         LLM1[Claude Sonnet 4.6<br/>databricks-claude-sonnet-4-6<br/>Foundation Model API]:::llm
-        LLM_USE1[User ID Extraction<br/>Agent Path]:::llm
-        LLM_USE2[Email Generation<br/>Both Paths]:::llm
+        LLM_USE[Email Generation<br/>Personalized campaign emails]:::llm
 
-        LLM1 --> LLM_USE1
-        LLM1 --> LLM_USE2
+        LLM1 --> LLM_USE
     end
 
     %% Data Layer
@@ -128,16 +106,8 @@ flowchart TB
     API5 --> SHARED1
     API6 --> SHARED3
 
-    %% Agent to Shared
-    AGENT2 --> SHARED2
-    AGENT3 --> SHARED2
-    AGENT4 --> SHARED2
-    AGENT5 --> SHARED2
-    AGENT6 --> SHARED1
-    AGENT1 --> SHARED3
-    AGENT2 --> LLM_USE1
-    AGENT6 --> LLM_USE2
-    API5 --> LLM_USE2
+    %% Shared to LLM
+    API5 --> LLM_USE
 
     %% Shared to Data
     SHARED2 --> TBL1
@@ -150,7 +120,6 @@ flowchart TB
     class DATABRICKS container
     class FRONTEND frontend
     class REST_API api
-    class AGENT api
     class SHARED shared
     class LLM_LAYER llm
     class DATA_LAYER data

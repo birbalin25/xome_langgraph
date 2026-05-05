@@ -2,7 +2,6 @@ CATALOG = "serverless_stable_14ey07_catalog"
 SCHEMA = "xome"
 SQL_WAREHOUSE_ID = "1f01d0f9de5b5108"
 LLM_ENDPOINT = "databricks-claude-sonnet-4-6"
-GENIE_SPACE_ID = "01f1484fd22e1d558c5ed706de7b522d"
 VOLUME_NAME = "campaign_emails"
 
 METROS = {

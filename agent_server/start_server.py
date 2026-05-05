@@ -1,23 +1,17 @@
 from pathlib import Path
 
+import uvicorn
 from dotenv import load_dotenv
-from fastapi import Request
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from mlflow.genai.agent_server import AgentServer, setup_mlflow_git_based_version_tracking
 
-# Load env vars from .env before importing the agent for proper auth
+# Load env vars from .env before importing other modules for proper auth
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 
-# Need to import the agent to register the functions with the server
-import agent_server.agent  # noqa: E402
-
-agent_server = AgentServer("ResponsesAgent", enable_chat_proxy=False)
-
-# Define the app as a module level variable to enable multiple workers
-app = agent_server.app  # noqa: F841
-
 from agent_server.campaign_api import router as campaign_router  # noqa: E402
+
+app = FastAPI(title="Xome Campaign Platform")
 app.include_router(campaign_router)
 
 # Serve the built frontend static files from frontend/dist/
@@ -42,8 +36,6 @@ if FRONTEND_DIST.is_dir():
             return HTMLResponse(index_file.read_text())
         return HTMLResponse("<h1>Frontend not built</h1><p>Run: cd frontend && npm run build</p>", status_code=500)
 
-setup_mlflow_git_based_version_tracking()
-
 
 def main():
-    agent_server.run(app_import_string="agent_server.start_server:app")
+    uvicorn.run("agent_server.start_server:app", host="0.0.0.0", port=8000)
