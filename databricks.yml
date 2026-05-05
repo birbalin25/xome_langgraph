@@ -35,11 +35,11 @@ resources:
             permission: "CAN_USE"
 
         # Uncomment after creating the Genie Space and setting the ID
-        # - name: "genie_space"
-        #   genie_space:
-        #     name: "Xome Real Estate Analytics"
-        #     space_id: "<TO_BE_SET_AFTER_GENIE_CREATION>"
-        #     permission: "CAN_RUN"
+        - name: "genie_space"
+          genie_space:
+            name: "Xome Real Estate Analytics"
+            space_id: "01f1484fd22e1d558c5ed706de7b522d"
+            permission: "CAN_RUN"
 
   experiments:
     xome_experiment:
