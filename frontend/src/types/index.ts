@@ -69,3 +69,10 @@ export interface GeneratedEmail {
   plain_text: string;
   raw: string;
 }
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  email?: GeneratedEmail | null;
+}

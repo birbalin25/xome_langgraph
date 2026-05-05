@@ -5,16 +5,52 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 # Load env vars from .env before importing other modules for proper auth
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 
 from agent_server.campaign_api import router as campaign_router  # noqa: E402
+from agent_server.chat_api import router as chat_router  # noqa: E402
 
 app = FastAPI(title="Xome Campaign Platform")
 app.include_router(campaign_router)
+app.include_router(chat_router)
 
-# Serve the built frontend static files from frontend/dist/
+
+# ── MLflow-compatible /invocations endpoint ──────────────────────────────────
+
+
+class InvocationRequest(BaseModel):
+    messages: list[dict]
+
+
+@app.post("/invocations")
+async def invocations(req: InvocationRequest):
+    """MLflow-compatible endpoint that routes chat messages to the LangGraph pipeline."""
+    from agent_server.graph import campaign_graph
+
+    # Extract the last user message
+    user_message = ""
+    for msg in reversed(req.messages):
+        if msg.get("role") == "user":
+            user_message = msg.get("content", "")
+            break
+
+    if not user_message:
+        return {"error": "No user message found in the request."}
+
+    result = await campaign_graph.ainvoke({
+        "raw_message": user_message,
+        "source": "chat",
+    })
+
+    reply = result.get("chat_response") or result.get("error") or "Something went wrong."
+    return {"choices": [{"message": {"role": "assistant", "content": reply}}]}
+
+
+# ── Serve the built frontend static files from frontend/dist/ ────────────────
+
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 if FRONTEND_DIST.is_dir():

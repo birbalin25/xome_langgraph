@@ -1,11 +1,11 @@
 bundle:
-  name: xome_campaign
+  name: xome_langgraph_campaign
 
 resources:
   apps:
-    agent_xome_campaign:
-      name: "agent-xome-campaign"
-      description: "Xome Campaign Platform — personalized real estate email campaigns"
+    agent_xome_langgraph_campaign:
+      name: "agent-xome-langgraph-campaign"
+      description: "Xome Campaign Platform — LangGraph-powered personalized real estate email campaigns"
       source_code_path: ./
       config:
         command: ["uv", "run", "start-server"]
@@ -37,5 +37,5 @@ targets:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     resources:
       apps:
-        agent_xome_campaign:
-          name: agent-xome-campaign
+        agent_xome_langgraph_campaign:
+          name: agent-xome-langgraph-campaign

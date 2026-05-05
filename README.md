@@ -1,6 +1,6 @@
 # Xome Campaign Platform
 
-An AI-powered real estate campaign platform that generates personalized emails promoting recommended properties to high-intent buyers. Built with FastAPI on the backend, React + TailwindCSS on the frontend, deployed as a single-process Databricks App.
+An AI-powered real estate campaign platform that generates personalized emails promoting recommended properties to high-intent buyers. Built with FastAPI on the backend, React + TailwindCSS on the frontend, LangGraph for pipeline orchestration, deployed as a single-process Databricks App.
 
 ![Architecture](pipeline_flow.png)
 
@@ -8,12 +8,21 @@ An AI-powered real estate campaign platform that generates personalized emails p
 
 ## How It Works
 
+### Dashboard Mode
+
 1. Use the **filter sidebar** to narrow down by city, state, price range, property type, or buyer segment
 2. Click **Search Users** to find matching high-intent buyers (top 20)
 3. Select a user from the dropdown — their profile and top 5 recommended properties load automatically
-4. Click **Generate Email** — Claude Sonnet 4.6 generates a personalized HTML email with subject line, property showcase, and segment-appropriate messaging
+4. Click **Generate Email** — the LangGraph pipeline runs (process_input → retrieve_candidates → rank_and_select → enrich_context → generate_email) and Claude Sonnet 4.6 generates a personalized HTML email
 5. Preview the email (HTML or plain text), click property links to see detail modals
 6. Click **Save to Volume** to persist the email as a `.txt` file in Unity Catalog
+
+### Chat Mode
+
+1. Switch to the **Chat** tab via the header toggle
+2. Type a natural language request, e.g. "Generate a campaign email for USER_001" or "Generate email for USER_042 in Austin"
+3. The LangGraph pipeline extracts the user ID (and optional city/state), runs the full pipeline autonomously, and returns a reply with an inline email preview
+4. The generated email is displayed in both the chat conversation and a sidebar preview panel
 
 **Critical rule:** Campaign properties come exclusively from the `recommendations` table. Browsing data is used for personalization tone only.
 
@@ -26,17 +35,21 @@ An AI-powered real estate campaign platform that generates personalized emails p
                     │         Databricks App (Port 8000)          │
                     │                                             │
  Browser ──────────►│  FastAPI serves:                            │
-                    │    ├── /assets/*        (static frontend)   │
-                    │    ├── /*               (SPA fallback)      │
-                    │    └── /api/campaign/*  (REST API)          │
+                    │    ├── /assets/*           (static frontend) │
+                    │    ├── /*                  (SPA fallback)    │
+                    │    ├── /api/campaign/*     (REST API)        │
+                    │    ├── /api/chat/message   (Chat API)        │
+                    │    └── /invocations        (MLflow compat)   │
                     └────────────┬────────────────────────────────┘
                                  │
                     ┌────────────▼────────────────────────────────┐
-                    │           Backend Components                │
-                    │  campaign_api.py  ←── REST endpoints        │
-                    │  email_generator.py ←── prompt + LLM call   │
-                    │  tools.py         ←── _execute_sql()        │
-                    │  config.py        ←── constants              │
+                    │        LangGraph StateGraph                  │
+                    │                                              │
+                    │  process_input → retrieve_candidates →       │
+                    │  rank_and_select → enrich_context →          │
+                    │  generate_email → END                        │
+                    │       |                  |                    │
+                    │       +--[error]--→ handle_error → END       │
                     └────────────┬────────────────────────────────┘
                                  │
               ┌──────────────────┼──────────────────┐
@@ -49,7 +62,23 @@ An AI-powered real estate campaign platform that generates personalized emails p
 
 The app runs as a **single process** — FastAPI on port 8000 serves both the pre-built React frontend (from `frontend/dist/`) and all API endpoints. This is required because Databricks Apps only exposes one port.
 
-**Call chain:** `React UI → campaign_api.py (REST) → email_generator.py → Claude LLM`
+**Dashboard call chain:** `React UI → campaign_api.py → LangGraph (source=dashboard) → email_generator.py → Claude LLM`
+**Chat call chain:** `React UI → chat_api.py → LangGraph (source=chat) → email_generator.py → Claude LLM`
+
+---
+
+## LangGraph Pipeline
+
+Both Dashboard and Chat modes share the same `StateGraph`:
+
+| Node | Purpose | Dashboard | Chat |
+|------|---------|-----------|------|
+| `process_input` | Extract user_id, fetch profile | Uses provided `user_id` | Parses `raw_message` via regex/LLM fallback |
+| `retrieve_candidates` | Fetch recommended properties | Uses `properties_input` from UI | Full DB query with optional city/state filter |
+| `rank_and_select` | Sort by score, pick top 5 | Pass-through (already selected) | Full sort |
+| `enrich_context` | Fetch last 20 browsing activities | Same for both | Same for both |
+| `generate_email` | Call Claude LLM | Returns email result | Also builds `chat_response` summary |
+| `handle_error` | Format error message | Returns error detail | Sets `chat_response` with error |
 
 ---
 
@@ -60,11 +89,15 @@ xome/
 ├── agent_server/                 # Backend application
 │   ├── agent.py                  # LLM setup (_SanitizedChatDatabricks, get_llm)
 │   ├── campaign_api.py           # REST API router (/api/campaign/*)
+│   ├── chat_api.py               # Chat API router (/api/chat/*)
+│   ├── graph_state.py            # LangGraph CampaignState TypedDict
+│   ├── graph_nodes.py            # LangGraph node functions
+│   ├── graph.py                  # LangGraph StateGraph definition + compilation
 │   ├── email_generator.py        # Email generation logic (prompt building, LLM call, parsing)
 │   ├── tools.py                  # SQL execution helper (_execute_sql)
-│   ├── prompts.py                # System prompt + email generation template
+│   ├── prompts.py                # System prompt + email generation + extraction templates
 │   ├── config.py                 # Constants (catalog, schema, warehouse, endpoints, metros)
-│   ├── start_server.py           # FastAPI app + static file serving
+│   ├── start_server.py           # FastAPI app + routers + /invocations + static file serving
 │   └── __init__.py
 ├── frontend/                     # React application (Vite + TailwindCSS)
 │   ├── package.json              # Dependencies: react, vite, tailwindcss, lucide-react
@@ -74,16 +107,21 @@ xome/
 │   ├── .npmrc                    # npm registry mirror config
 │   └── src/
 │       ├── main.tsx
-│       ├── App.tsx               # Root layout (Header + AppShell)
+│       ├── App.tsx               # Root layout (Header + view switching: AppShell / ChatPanel)
 │       ├── index.css             # Tailwind directives + custom styles
-│       ├── types/index.ts        # TypeScript interfaces
-│       ├── api/campaign.ts       # Typed fetch wrappers for all REST endpoints
+│       ├── types/index.ts        # TypeScript interfaces (incl. ChatMessage)
+│       ├── api/
+│       │   ├── campaign.ts       # Typed fetch wrappers for campaign REST endpoints
+│       │   └── chat.ts           # Typed fetch wrapper for chat endpoint
 │       ├── lib/utils.ts          # formatPrice, formatDate helpers
 │       └── components/
 │           ├── layout/
-│           │   ├── Header.tsx        # Xome branding bar
+│           │   ├── Header.tsx        # Xome branding bar + Dashboard/Chat toggle
 │           │   ├── Sidebar.tsx       # Left filter panel container
-│           │   └── AppShell.tsx      # Top-level state management + orchestration
+│           │   └── AppShell.tsx      # Dashboard: state management + orchestration
+│           ├── chat/
+│           │   ├── ChatPanel.tsx     # Chat conversation + input + email preview sidebar
+│           │   └── ChatMessage.tsx   # Individual message bubble (user/assistant)
 │           ├── filters/
 │           │   ├── FilterPanel.tsx   # City, State, Price Range, Property Type, Segment
 │           │   └── metros.ts        # City-to-state mapping for filter cascade
@@ -115,6 +153,10 @@ xome/
 
 ## Key Components
 
+### LangGraph Pipeline (`graph.py`, `graph_state.py`, `graph_nodes.py`)
+
+The `CampaignState` TypedDict flows through a `StateGraph` with nodes for input processing, candidate retrieval, ranking, context enrichment, and email generation. A `source` field (`"dashboard"` or `"chat"`) controls behavior differences at each node.
+
 ### REST API (`campaign_api.py`)
 
 FastAPI `APIRouter` with prefix `/api/campaign`:
@@ -125,8 +167,22 @@ FastAPI `APIRouter` with prefix `/api/campaign`:
 | `POST` | `/users` | Top 20 users matching filters (joined with recommendation counts) |
 | `GET` | `/users/{id}/profile` | Full user profile |
 | `POST` | `/users/{id}/listings` | Top 5 recommended properties (optional city/state filter) |
-| `POST` | `/generate-email` | Generate campaign email via Claude LLM |
+| `POST` | `/generate-email` | Generate campaign email via LangGraph (source=dashboard) |
 | `POST` | `/save-email` | Save email to UC Volume |
+
+### Chat API (`chat_api.py`)
+
+FastAPI `APIRouter` with prefix `/api/chat`:
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/message` | Natural language chat → LangGraph (source=chat) → reply + email |
+
+### MLflow-Compatible Endpoint
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/invocations` | Accepts `{messages: [{role, content}]}`, routes to LangGraph |
 
 ### Email Generator (`email_generator.py`)
 
@@ -148,11 +204,11 @@ Module for prompt construction and LLM invocation:
 
 ### Frontend
 
-#### UI Layout
+#### UI Layout — Dashboard Mode
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│  Header: Xome Campaign Platform                           │
+│  Header: Xome Campaign Platform    [Dashboard] [Chat]      │
 ├──────────────┬────────────────────────────────────────────┤
 │ FILTERS      │ [User Dropdown ▼]     [User Profile Card] │
 │              │────────────────────────────────────────────│
@@ -169,18 +225,28 @@ Module for prompt construction and LLM invocation:
 └──────────────┴────────────────────────────────────────────┘
 ```
 
-#### Property Cards (Zillow-style)
+#### UI Layout — Chat Mode
 
-- Full-width image (from `image_url` column or picsum.photos fallback)
-- Status badge: green (Active), yellow (Pending), red pulsing (Auction)
-- Price, beds/baths/sqft, address, neighborhood
-- Recommendation score progress bar
-- Auction banner with date and starting price (for auction listings)
-
-#### Email Preview
-
-- Tabbed view: HTML rendered in sandboxed iframe, plain text in `<pre>` block
-- Click interception: injected script intercepts link clicks in the iframe, sends `postMessage` to parent, matches to a property by address, and opens a **PropertyDetailModal** popup instead of navigating away
+```
+┌───────────────────────────────────────────────────────────┐
+│  Header: Xome Campaign Platform    [Dashboard] [Chat]      │
+├───────────────────────────────────┬────────────────────────┤
+│  Chat Messages                    │ Latest Email Preview   │
+│  ┌───────────────────────────┐   │                        │
+│  │ User: Generate email for  │   │ Subject: ...           │
+│  │       USER_001            │   │ [HTML] [Plain Text]    │
+│  └───────────────────────────┘   │                        │
+│  ┌───────────────────────────┐   │ (rendered email)       │
+│  │ Assistant: I've generated │   │                        │
+│  │ a campaign email...       │   │                        │
+│  │ [Inline Email Preview]    │   │                        │
+│  └───────────────────────────┘   │                        │
+│                                   │                        │
+│  ┌──────────────────────┐ [Send] │                        │
+│  │ Type a message...     │       │                        │
+│  └──────────────────────┘        │                        │
+└───────────────────────────────────┴────────────────────────┘
+```
 
 ---
 
@@ -219,7 +285,7 @@ All tables are stored as Delta tables in Unity Catalog: `serverless_stable_14ey0
 | SQL Warehouse | `1f01d0f9de5b5108` |
 | LLM Endpoint | `databricks-claude-sonnet-4-6` |
 | UC Volume | `campaign_emails` (for saved email files) |
-| App URL | https://agent-xome-campaign-7474645414452466.aws.databricksapps.com |
+| App URL | https://agent-xome-langgraph-campaign-7474645414452466.aws.databricksapps.com |
 
 ---
 
@@ -278,6 +344,16 @@ curl http://localhost:8000/api/campaign/users/USER_001/profile
 curl -X POST http://localhost:8000/api/campaign/users/USER_001/listings \
   -H "Content-Type: application/json" \
   -d '{"city": "Austin", "state": "TX"}'
+
+# Chat interface
+curl -X POST http://localhost:8000/api/chat/message \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Generate a campaign email for USER_001"}'
+
+# MLflow-compatible invocations
+curl -X POST http://localhost:8000/invocations \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Generate email for USER_001"}]}'
 ```
 
 ### Deploy to Databricks
@@ -293,8 +369,8 @@ databricks bundle validate --target prod
 databricks bundle deploy --target prod
 
 # Deploy app source code
-databricks apps deploy agent-xome-campaign --profile fevm \
-  --source-code-path /Workspace/Users/birbal.das@databricks.com/.bundle/xome_campaign/prod/files
+databricks apps deploy agent-xome-langgraph-campaign --profile fevm \
+  --source-code-path /Workspace/Users/birbal.das@databricks.com/.bundle/xome_langgraph_campaign/prod/files
 
 # Generate synthetic data (run once)
 databricks bundle run xome_setup_pipeline --target prod
@@ -304,10 +380,10 @@ databricks bundle run xome_setup_pipeline --target prod
 
 ```bash
 # Status
-databricks apps get agent-xome-campaign --profile fevm
+databricks apps get agent-xome-langgraph-campaign --profile fevm
 
 # Logs
-databricks apps logs agent-xome-campaign --profile fevm
+databricks apps logs agent-xome-langgraph-campaign --profile fevm
 ```
 
 ---
@@ -331,7 +407,7 @@ Generates 4 Delta tables using Faker with:
 
 ## Dependencies
 
-**Backend (Python):** `fastapi`, `uvicorn`, `databricks-langchain`, `databricks-sdk`, `python-dotenv`, `faker` (data gen only)
+**Backend (Python):** `fastapi`, `uvicorn`, `databricks-langchain`, `databricks-sdk`, `python-dotenv`, `langgraph`, `faker` (data gen only)
 
 **Frontend (Node.js):** `react`, `vite`, `tailwindcss`, `lucide-react`, `typescript`
 

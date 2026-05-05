@@ -10,7 +10,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from agent_server.config import CATALOG, SCHEMA, VOLUME_NAME
-from agent_server.email_generator import generate_campaign_email, parse_email_response
 from agent_server.tools import _execute_sql
 
 logger = logging.getLogger(__name__)
@@ -183,42 +182,23 @@ async def get_user_listings(user_id: str, req: ListingsRequest):
 
 
 @router.post("/generate-email")
-async def generate_email(req: GenerateEmailRequest):
-    """Generate a campaign email for the given user + properties."""
-    from agent_server.agent import get_llm
-
-    # Fetch full profile
-    profile_rows = _execute_sql(f"""
-        SELECT user_id, first_name, last_name, email, phone,
-               preferred_city, preferred_state, budget_min, budget_max,
-               preferred_property_type, preferred_beds_min,
-               signup_date, is_active, user_segment
-        FROM {CATALOG}.{SCHEMA}.users
-        WHERE user_id = '{req.user_id}'
-        LIMIT 1
-    """)
-    if not profile_rows:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    profile = profile_rows[0]
-
-    # Fetch browsing context
-    browsing_rows = _execute_sql(f"""
-        SELECT b.activity_type, b.activity_timestamp, b.session_duration_seconds,
-               b.search_query, b.device_type, b.referral_source,
-               p.address, p.city, p.state, p.price, p.property_type,
-               p.beds, p.neighborhood
-        FROM {CATALOG}.{SCHEMA}.browsing_activity b
-        JOIN {CATALOG}.{SCHEMA}.properties p ON b.property_id = p.property_id
-        WHERE b.user_id = '{req.user_id}'
-        ORDER BY b.activity_timestamp DESC
-        LIMIT 20
-    """)
+async def generate_email_endpoint(req: GenerateEmailRequest):
+    """Generate a campaign email for the given user + properties via LangGraph."""
+    from agent_server.graph import campaign_graph
 
     try:
-        llm = get_llm()
-        result = await generate_campaign_email(llm, profile, req.properties, browsing_rows)
-        return result
+        result = await campaign_graph.ainvoke({
+            "user_id": req.user_id,
+            "properties_input": req.properties,
+            "source": "dashboard",
+        })
+
+        if result.get("error"):
+            raise HTTPException(status_code=400, detail=result["error"])
+
+        return result.get("generated_email", {})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to generate email")
         raise HTTPException(status_code=500, detail=str(e))
