@@ -1,19 +1,63 @@
-# Xome Agentic Email & Personalized Communication Platform
+# Xome Campaign Platform
 
-An AI-powered campaign platform that sends personalized emails promoting recommended properties to high-intent real estate buyers. Built with LangGraph, deployed as a Databricks App with a Next.js chat interface.
+An AI-powered real estate campaign platform that generates personalized emails promoting recommended properties to high-intent buyers. Built with LangGraph + FastAPI on the backend, React + TailwindCSS on the frontend, deployed as a single-process Databricks App.
 
-![Pipeline Flow](pipeline_flow.png)
+![Architecture](pipeline_flow.png)
+![LangGraph Workflow](langgraph_workflow.png)
+
+---
 
 ## How It Works
 
-1. You open the chat UI and ask: _"Generate a campaign email for user `<user_id>`"_
-2. The agent extracts the user ID, fetches their profile from the `users` table
-3. It pulls recommended properties from the `recommendations` table (the **only** source for campaign properties)
-4. It ranks them by recommendation score and picks the top 5
-5. It fetches recent browsing activity for personalization context
-6. Claude Sonnet 4.6 generates a personalized HTML email with subject line, property showcase, and segment-appropriate messaging
+The platform offers **two paths** to generate campaign emails, both sharing the same core logic:
 
-**Critical rule:** Campaign properties come exclusively from the recommendation engine. Browsing data is used for personalization tone only.
+### Path 1: Dashboard UI (REST API)
+
+1. Use the filter sidebar to narrow down by city, state, price range, property type, or buyer segment
+2. Click **Search Users** to find matching high-intent buyers (top 20)
+3. Select a user from the dropdown — their profile and top 5 recommended properties load automatically
+4. Click **Generate Email** — Claude Sonnet 4.6 generates a personalized HTML email with subject line, property showcase, and segment-appropriate messaging
+5. Preview the email (HTML or plain text), click property links to see detail modals
+6. Click **Save to Volume** to persist the email as a `.txt` file in Unity Catalog
+
+### Path 2: Chat Agent (LangGraph)
+
+1. Send a message to `/invocations`: _"Generate a campaign email for user `<user_id>`"_
+2. The LangGraph agent extracts the user ID, fetches their profile, retrieves recommendations, ranks by score, enriches with browsing context, and generates the email — all through a 5-node pipeline
+
+**Critical rule:** Campaign properties come exclusively from the `recommendations` table. Browsing data is used for personalization tone only.
+
+---
+
+## Architecture
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │         Databricks App (Port 8000)          │
+                    │                                             │
+ Browser ──────────►│  FastAPI serves:                            │
+                    │    ├── /assets/*        (static frontend)   │
+                    │    ├── /*               (SPA fallback)      │
+                    │    ├── /api/campaign/*  (REST API)          │
+                    │    └── /invocations     (LangGraph agent)   │
+                    └────────────┬────────────────────────────────┘
+                                 │
+                    ┌────────────▼────────────────────────────────┐
+                    │           Shared Components                 │
+                    │  email_generator.py  ←── used by both paths │
+                    │  _execute_sql()      ←── Databricks SQL     │
+                    │  config.py           ←── constants           │
+                    └────────────┬────────────────────────────────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              ▼                  ▼                   ▼
+    Claude Sonnet 4.6    Delta Tables          UC Volume
+    (Foundation Model)   (users, properties,   (campaign_emails)
+                         recommendations,
+                         browsing_activity)
+```
+
+The app runs as a **single process** — FastAPI on port 8000 serves both the pre-built React frontend (from `frontend/dist/`) and all API endpoints. This is required because Databricks Apps only exposes one port.
 
 ---
 
@@ -21,128 +65,185 @@ An AI-powered campaign platform that sends personalized emails promoting recomme
 
 ```
 xome/
-├── agent_server/              # Core agent application
-│   ├── agent.py               # LangGraph StateGraph (5 nodes, conditional edges)
-│   ├── tools.py               # SQL-backed tools (get_user_profile, get_recommendations, get_browsing_context)
-│   ├── prompts.py             # System prompt + email generation template
-│   ├── config.py              # Constants (catalog, schema, warehouse, endpoints)
-│   ├── utils.py               # Auth helpers, stream processing, _SanitizedChatDatabricks
-│   ├── start_server.py        # FastAPI + MLflow AgentServer entry point
+├── agent_server/                 # Backend application
+│   ├── agent.py                  # LangGraph StateGraph (5 nodes, conditional edges)
+│   ├── campaign_api.py           # REST API router (/api/campaign/*)
+│   ├── email_generator.py        # Shared email generation logic (prompt building, LLM call, parsing)
+│   ├── tools.py                  # SQL-backed tools (get_user_profile, get_recommendations, etc.)
+│   ├── prompts.py                # System prompt + email generation template
+│   ├── config.py                 # Constants (catalog, schema, warehouse, endpoints, metros)
+│   ├── utils.py                  # Auth helpers, stream processing, _SanitizedChatDatabricks
+│   ├── start_server.py           # FastAPI + MLflow AgentServer + static file serving
 │   └── __init__.py
+├── frontend/                     # React application (Vite + TailwindCSS)
+│   ├── package.json              # Dependencies: react, vite, tailwindcss, lucide-react
+│   ├── vite.config.ts            # Dev proxy /api → localhost:8000
+│   ├── tailwind.config.js        # Xome color palette
+│   ├── index.html
+│   ├── .npmrc                    # npm registry mirror config
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx               # Root layout (Header + AppShell)
+│       ├── index.css             # Tailwind directives + custom styles
+│       ├── types/index.ts        # TypeScript interfaces
+│       ├── api/campaign.ts       # Typed fetch wrappers for all REST endpoints
+│       ├── lib/utils.ts          # formatPrice, formatDate helpers
+│       └── components/
+│           ├── layout/
+│           │   ├── Header.tsx        # Xome branding bar
+│           │   ├── Sidebar.tsx       # Left filter panel container
+│           │   └── AppShell.tsx      # Top-level state management + orchestration
+│           ├── filters/
+│           │   ├── FilterPanel.tsx   # City, State, Price Range, Property Type, Segment
+│           │   └── metros.ts        # City-to-state mapping for filter cascade
+│           ├── users/
+│           │   ├── UserDropdown.tsx      # Searchable dropdown, top 20 users
+│           │   └── UserProfileCard.tsx   # Selected user summary card
+│           ├── properties/
+│           │   ├── PropertyCard.tsx      # Zillow-style card with image, price, stats, score bar
+│           │   ├── PropertyGrid.tsx      # Responsive grid layout
+│           │   └── PropertyDetailModal.tsx  # Detail popup from email links
+│           └── email/
+│               ├── EmailPreview.tsx  # Tabbed HTML/PlainText preview with click interception
+│               └── EmailActions.tsx  # Generate + Save buttons with status indicators
 ├── notebooks/
-│   ├── 01_generate_data.py    # Synthetic data generation (4 Delta tables, PK/FK constraints)
+│   ├── 01_generate_data.py       # Synthetic data generation (4 Delta tables, PK/FK constraints)
 │   └── 02_genie_setup_instructions.py  # 10 SQL queries + Genie Space setup guide
 ├── scripts/
-│   ├── quickstart.py          # Interactive setup (auth, MLflow experiment)
-│   ├── start_app.py           # Concurrent frontend + backend launcher
-│   └── discover_tools.py      # Databricks tool/resource discovery
-├── databricks.yml             # Bundle config (app + experiment + job + Genie Space)
-├── app.yaml                   # Databricks Apps runtime config
-├── pyproject.toml             # Python dependencies and entry points
-├── requirements.txt           # Contains "uv" (actual deps in pyproject.toml)
-├── .env.example               # Environment variable template
-├── pipeline_flow.png          # Architecture diagram
-└── pipeline_flow.mmd          # Mermaid source for the diagram
+│   ├── quickstart.py             # Interactive setup (auth, MLflow experiment)
+│   ├── start_app.py              # Concurrent frontend dev + backend launcher
+│   └── discover_tools.py         # Databricks tool/resource discovery
+├── databricks.yml                # Bundle config (app + experiment + job + Genie Space)
+├── app.yaml                      # Databricks Apps runtime config (single process)
+├── pyproject.toml                # Python dependencies and entry points
+├── pipeline_flow.mmd             # Architecture diagram (Mermaid source)
+├── pipeline_flow.png             # Architecture diagram (rendered)
+├── langgraph_workflow.mmd        # LangGraph workflow diagram (Mermaid source)
+└── langgraph_workflow.png        # LangGraph workflow diagram (rendered)
 ```
 
 ---
 
 ## Key Components
 
-### `agent_server/agent.py` — LangGraph Pipeline
+### Backend
 
-The core of the application. Implements a custom `StateGraph` with 5 nodes and conditional error routing:
+#### `agent_server/agent.py` — LangGraph Pipeline
 
-| Node | Purpose | Tools/APIs Used |
-|------|---------|-----------------|
-| `process_input` | Parses user message with LLM to extract `user_id`, fetches user profile | Claude Sonnet 4.6 (extraction), `get_user_profile` |
-| `retrieve_candidates` | Fetches recommended properties from the recommendations table | `get_recommendations` |
-| `rank_and_select` | Sorts candidates by `recommendation_score`, picks top 5 | Pure logic (no external calls) |
-| `enrich_context` | Fetches recent browsing activity for personalization | `get_browsing_context` |
-| `generate_email` | Generates HTML + plain text campaign email | Claude Sonnet 4.6 (generation) |
+5-node `StateGraph` with conditional error routing:
+
+| Node | Purpose | External Calls |
+|------|---------|----------------|
+| `process_input` | LLM extracts `user_id` from message, fetches user profile | Claude Sonnet 4.6, `users` table |
+| `retrieve_candidates` | Fetches recommended properties (with optional city/state filter) | `recommendations JOIN properties` |
+| `rank_and_select` | Sorts by `recommendation_score` DESC, picks top 5 | Pure logic |
+| `enrich_context` | Fetches recent browsing activity for personalization | `browsing_activity JOIN properties` |
+| `generate_email` | Generates HTML + plain text campaign email | Claude Sonnet 4.6 via `email_generator.py` |
 
 Error handling routes to `handle_error` if: no valid user ID found, user not found in DB, or no recommendations exist.
 
-The state flows through `CampaignState` (a `TypedDict`) carrying: `messages`, `user_profile`, `candidate_properties`, `top_5_properties`, `browsing_context`, `campaign_email`, and `error`.
+State flows through `CampaignState` (a `TypedDict`): `messages`, `user_profile`, `candidate_properties`, `top_5_properties`, `browsing_context`, `campaign_email`, and `error`.
 
-Also includes `_SanitizedChatDatabricks` — a `ChatDatabricks` subclass that strips `id` fields from tool message content blocks, required for Claude compatibility on Databricks Foundation Model API.
+#### `agent_server/campaign_api.py` — REST API
 
-The `@invoke()` and `@stream()` decorators register handlers with MLflow's Responses API for both synchronous and streaming access.
+FastAPI `APIRouter` with prefix `/api/campaign`:
 
-### `agent_server/tools.py` — SQL-Backed Tools
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/filters` | Distinct cities, states, property types, segments, price ranges |
+| `POST` | `/users` | Top 20 users matching filters (joined with recommendation counts) |
+| `GET` | `/users/{id}/profile` | Full user profile |
+| `POST` | `/users/{id}/listings` | Top 5 recommended properties (optional city/state filter) |
+| `POST` | `/generate-email` | Generate campaign email via Claude LLM |
+| `POST` | `/save-email` | Save email to UC Volume via `WorkspaceClient.files.upload()` |
 
-Three `@tool`-decorated functions that query Delta tables via the Databricks SQL Statement Execution API:
+#### `agent_server/email_generator.py` — Shared Email Logic
 
-- **`get_user_profile(user_id)`** — Single-row lookup from `users` table. Returns profile with preferences, budget, segment.
-- **`get_recommendations(user_id, city, state, limit)`** — JOINs `recommendations` with `properties`. Filters by active recommendations and optional city/state. Sorted by `recommendation_score DESC`. This is the **only** source for campaign properties.
-- **`get_browsing_context(user_id)`** — JOINs `browsing_activity` with `properties`. Returns recent activity with a summary of activity types, cities browsed, and property types viewed. For personalization context only.
+Used by **both** the REST API and the LangGraph agent:
 
-All tools use a shared `_execute_sql()` helper that calls `WorkspaceClient.statement_execution.execute_statement()` against the configured SQL warehouse.
+- `build_properties_section(properties)` — Format property details for the prompt
+- `build_browsing_section(browsing)` — Format browsing activity for personalization
+- `format_email_prompt(profile, properties, browsing)` — Build full LLM prompt
+- `generate_campaign_email(llm, profile, properties, browsing)` — Invoke Claude and return parsed result
+- `parse_email_response(raw)` — Parse `SUBJECT` / `HTML` / `PLAIN TEXT` sections from LLM output
 
-### `agent_server/prompts.py` — LLM Prompts
+#### `agent_server/tools.py` — SQL-Backed Tools
 
-Two templates:
+Three `@tool`-decorated functions that query Delta tables via Databricks SQL Statement Execution API:
 
-- **`SYSTEM_PROMPT`** — Defines the agent's identity as the "Xome Campaign Agent", the 6-step workflow, and critical rules about recommendation-only property sourcing.
-- **`EMAIL_GENERATION_PROMPT`** — A structured template with placeholders for user profile, top 5 properties (with all details including auction info), and browsing context. Instructs Claude to generate segment-appropriate messaging (first-time buyer = encouraging, investor = ROI-focused, upgrader = aspirational, downsizer = practical).
+- **`get_user_profile(user_id)`** — Single-row lookup from `users` table
+- **`get_recommendations(user_id, city, state, limit)`** — JOINs `recommendations` with `properties`, sorted by score DESC
+- **`get_browsing_context(user_id)`** — JOINs `browsing_activity` with `properties`, returns recent activity
 
-### `agent_server/config.py` — Configuration
+All tools use a shared `_execute_sql()` helper calling `WorkspaceClient.statement_execution.execute_statement()`.
 
-All constants in one place: catalog name, schema, SQL warehouse ID, LLM endpoint, Genie Space ID, and a `METROS` dictionary defining 10 US cities with base property prices.
+#### `agent_server/start_server.py` — Server Entry Point
 
-### `agent_server/utils.py` — Utilities
+- Loads `.env`, creates MLflow `AgentServer` with `enable_chat_proxy=False`
+- Mounts the campaign API router
+- Serves pre-built frontend from `frontend/dist/` with SPA fallback
+- Handles `/assets/*` static files and `/{path}` → `index.html` for client-side routing
 
-- **`process_agent_astream_events()`** — Converts LangGraph stream events to MLflow `ResponsesAgentStreamEvent` format. Filters out `ToolMessage` and intermediate `AIMessage` with tool calls, only yielding final text responses to the UI.
-- **`get_user_workspace_client()`** — Creates a `WorkspaceClient` using the forwarded access token for on-behalf-of (OBO) authentication when deployed.
-- **`get_databricks_host_from_env()`** — Extracts workspace URL from SDK config.
+### Frontend
 
-### `agent_server/start_server.py` — Server Entry Point
+#### UI Layout
 
-Loads `.env`, imports the agent module (which registers `@invoke`/`@stream` handlers), creates an MLflow `AgentServer` with chat proxy enabled, and exposes the FastAPI `app` for uvicorn.
+```
+┌───────────────────────────────────────────────────────────┐
+│  Header: Xome Campaign Platform                           │
+├──────────────┬────────────────────────────────────────────┤
+│ FILTERS      │ [User Dropdown ▼]     [User Profile Card] │
+│              │────────────────────────────────────────────│
+│ City    [▼]  │ Top Recommended Listings                   │
+│ State   [▼]  │ ┌────────┐ ┌────────┐ ┌────────┐         │
+│ Price [═══]  │ │  Card  │ │  Card  │ │  Card  │         │
+│ Type    [▼]  │ └────────┘ └────────┘ └────────┘         │
+│ Segment [▼]  │ ┌────────┐ ┌────────┐                     │
+│              │ │  Card  │ │  Card  │                     │
+│ [Search      │ └────────┘ └────────┘                     │
+│  Users]      │────────────────────────────────────────────│
+│              │ [Generate Email] [Save to Volume]          │
+│              │ Email Preview (HTML | Plain Text tabs)     │
+└──────────────┴────────────────────────────────────────────┘
+```
 
-### `notebooks/01_generate_data.py` — Synthetic Data Generation
+#### Property Cards (Zillow-style)
 
-Databricks notebook that generates 4 Delta tables using Faker:
+- Full-width image (from `image_url` column or picsum.photos fallback)
+- Status badge: green (Active), yellow (Pending), red pulsing (Auction)
+- Price, beds/baths/sqft, address, neighborhood
+- Recommendation score progress bar
+- Auction banner with date and starting price (for auction listings)
 
-| Table | Rows | Description |
-|-------|------|-------------|
-| `users` | 500 | Buyers with city-calibrated budgets, property type preferences, segments (first_time_buyer/investor/upgrader/downsizer) |
-| `properties` | 1,000 | Listings with realistic pricing by city and type, neighborhoods, school ratings, auction data, valid image URLs via picsum.photos |
-| `browsing_activity` | 10,000 | User interactions (view/save/search/share/bid) with realistic city affinity (70% in preferred city) |
-| `recommendations` | 5,000 | Computed scores based on budget/city/type/beds match with template explanations |
+#### Email Preview
 
-After data generation, the notebook sets:
-- **Primary keys** on all ID columns (with `NOT NULL` constraints)
-- **Foreign keys** linking `browsing_activity` and `recommendations` back to `users` and `properties`
+- Tabbed view: HTML rendered in sandboxed iframe, plain text in `<pre>` block
+- Click interception: injected script intercepts link clicks in the iframe, sends `postMessage` to parent, matches to a property by address, and opens a **PropertyDetailModal** popup instead of navigating away
 
-### `notebooks/02_genie_setup_instructions.py` — Genie Space Setup
+---
 
-Contains 10 SQL analytics queries for the Genie Space:
+## Data Model
 
-1. Most active users in the last 30 days
-2. Average property prices by city and type
-3. Upcoming auctions in the next 14 days
-4. Lapsed high-intent users (campaign targeting)
-5. Recommendation performance by city
-6. Browsing-to-bid conversion funnel
-7. Properties with most user interest
-8. User segment behavior comparison
-9. Device and channel engagement analysis
-10. Auction vs standard listing performance
+```
+users (500)                    properties (1,000)
+  PK: user_id                    PK: property_id
+  ├── preferred_city             ├── city, state, neighborhood
+  ├── budget_min/max             ├── price, beds, baths, sqft
+  ├── preferred_property_type    ├── listing_status (active/pending/auction/sold)
+  └── user_segment               ├── auction_date, auction_start_price
+                                 ├── image_url (picsum.photos)
+        │                        └── description
+        ▼                              │
+browsing_activity (10,000)     recommendations (5,000)
+  PK: activity_id                PK: recommendation_id
+  FK: user_id -> users           FK: user_id -> users
+  FK: property_id -> properties  FK: property_id -> properties
+  ├── activity_type              ├── recommendation_score (0.0-1.0)
+  ├── session_duration           ├── recommendation_reason
+  └── device_type, referral      └── model_version, is_active
+```
 
-### `databricks.yml` — Bundle Configuration
-
-Defines:
-- **App resource** (`agent-xome-campaign`) with permissions for the MLflow experiment, SQL warehouse, and Genie Space
-- **MLflow experiment** for tracing
-- **Job** (`xome_setup_pipeline`) for running the data generation notebook on serverless compute
-- **Targets**: `dev` (local development) and `prod` (fevm workspace)
-
-### `scripts/` — Helper Scripts
-
-- **`quickstart.py`** — Interactive first-time setup: validates prerequisites (uv, node, databricks CLI), authenticates with Databricks OAuth, creates MLflow experiment, writes `.env` config.
-- **`start_app.py`** — Runs backend (FastAPI agent server) and frontend (Next.js chat app) concurrently. Clones the `e2e-chatbot-app-next` template if needed, monitors both processes, reports when both are ready.
-- **`discover_tools.py`** — Scans the workspace for available UC functions, tables, vector search indexes, Genie spaces, and MCP servers. Useful for finding resources to connect to the agent.
+All tables are stored as Delta tables in Unity Catalog: `serverless_stable_14ey07_catalog.xome.*`
 
 ---
 
@@ -156,6 +257,7 @@ Defines:
 | SQL Warehouse | `1f01d0f9de5b5108` |
 | LLM Endpoint | `databricks-claude-sonnet-4-6` |
 | Genie Space | `01f1484fd22e1d558c5ed706de7b522d` |
+| UC Volume | `campaign_emails` (for saved email files) |
 | App URL | https://agent-xome-campaign-7474645414452466.aws.databricksapps.com |
 
 ---
@@ -169,7 +271,7 @@ Defines:
 - [Databricks CLI](https://docs.databricks.com/dev-tools/cli/install.html) v0.283.0+
 - A Databricks workspace with access to Foundation Model APIs
 
-### Run Locally
+### Local Development
 
 ```bash
 # 1. Clone the repo
@@ -183,31 +285,57 @@ cp .env.example .env
 # 3. Run quickstart (sets up auth + MLflow experiment)
 uv run quickstart --profile fevm
 
-# 4. Start the app (backend on :8000, frontend on :3000)
+# 4. Install frontend dependencies
+cd frontend && npm install && cd ..
+
+# 5. Start the app (backend on :8000, frontend dev on :3000 with API proxy)
 uv run start-app
 ```
 
-Open http://localhost:3000 in your browser.
+Open http://localhost:8000 in your browser. During local development, the Vite dev server runs on port 3000 and proxies `/api` requests to port 8000.
 
-### Test the Backend Directly
+### Build Frontend for Production
 
 ```bash
-# Get a sample user_id
-databricks api post /api/2.0/sql/statements --profile fevm --json '{
-  "warehouse_id": "1f01d0f9de5b5108",
-  "statement": "SELECT user_id, first_name, preferred_city FROM serverless_stable_14ey07_catalog.xome.users LIMIT 3",
-  "wait_timeout": "30s"
-}'
+cd frontend && npm run build && cd ..
+```
 
-# Call the agent
+This creates `frontend/dist/` which FastAPI serves as static files in production.
+
+### Test the REST API
+
+```bash
+# Get filter options
+curl http://localhost:8000/api/campaign/filters
+
+# Search users with filters
+curl -X POST http://localhost:8000/api/campaign/users \
+  -H "Content-Type: application/json" \
+  -d '{"city": "Austin", "state": "TX"}'
+
+# Get user profile
+curl http://localhost:8000/api/campaign/users/USER_001/profile
+
+# Get top recommended listings
+curl -X POST http://localhost:8000/api/campaign/users/USER_001/listings \
+  -H "Content-Type: application/json" \
+  -d '{"city": "Austin", "state": "TX"}'
+```
+
+### Test the LangGraph Agent
+
+```bash
 curl -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "Generate a campaign email for user <USER_ID>"}]}'
+  -d '{"input": [{"role": "user", "content": "Generate a campaign email for user USER_001"}]}'
 ```
 
 ### Deploy to Databricks
 
 ```bash
+# Build frontend first
+cd frontend && npm run build && cd ..
+
 # Validate the bundle
 databricks bundle validate --target prod
 
@@ -234,26 +362,28 @@ databricks apps logs agent-xome-campaign --profile fevm
 
 ---
 
-## Data Model
+## Notebooks
 
-```
-users (500)                    properties (1,000)
-  PK: user_id                    PK: property_id
-  ├── preferred_city             ├── city, state, neighborhood
-  ├── budget_min/max             ├── price, beds, baths, sqft
-  ├── preferred_property_type    ├── listing_status (active/pending/auction/sold)
-  └── user_segment               ├── auction_date, auction_start_price
-                                 └── image_url (picsum.photos)
-        │                              │
-        ▼                              ▼
-browsing_activity (10,000)     recommendations (5,000)
-  PK: activity_id                PK: recommendation_id
-  FK: user_id -> users           FK: user_id -> users
-  FK: property_id -> properties  FK: property_id -> properties
-  ├── activity_type              ├── recommendation_score (0.0-1.0)
-  ├── session_duration           ├── recommendation_reason
-  └── device_type, referral      └── model_version, is_active
-```
+### `01_generate_data.py` — Synthetic Data Generation
+
+Generates 4 Delta tables using Faker with:
+- City-calibrated budgets and property prices
+- Realistic browsing patterns (70% in preferred city)
+- ML-scored recommendations with template explanations
+- Valid image URLs via picsum.photos
+- Primary keys and foreign key constraints
+
+### `02_genie_setup_instructions.py` — Genie Space Queries
+
+10 SQL analytics queries: most active users, price analysis by city/type, upcoming auctions, lapsed users for targeting, recommendation performance, browsing-to-bid conversion, property interest rankings, segment behavior comparison, device/channel engagement, auction vs standard performance.
+
+---
+
+## Dependencies
+
+**Backend (Python):** `fastapi`, `databricks-langchain`, `mlflow>=3.10.0`, `langgraph`, `langchain-mcp-adapters`, `python-dotenv`, `faker` (data gen only)
+
+**Frontend (Node.js):** `react`, `vite`, `tailwindcss`, `lucide-react`, `typescript`
 
 ---
 
