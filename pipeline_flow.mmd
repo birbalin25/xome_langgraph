@@ -1,175 +1,94 @@
-flowchart TB
-    %% Styling
-    classDef frontend fill:#4ade80,stroke:#22c55e,stroke-width:2px,color:#000
-    classDef api fill:#3b82f6,stroke:#2563eb,stroke-width:2px,color:#fff
-    classDef llm fill:#a855f7,stroke:#9333ea,stroke-width:2px,color:#fff
-    classDef data fill:#7dd3fc,stroke:#0ea5e9,stroke-width:2px,color:#000
-    classDef shared fill:#fbbf24,stroke:#f59e0b,stroke-width:2px,color:#000
-    classDef container fill:#e5e7eb,stroke:#9ca3af,stroke-width:3px,color:#000
-    classDef node_ok fill:#f9a8d4,stroke:#ec4899,stroke-width:2px,color:#000
-    classDef node_err fill:#fca5a5,stroke:#ef4444,stroke-width:2px,color:#000
-    classDef startend fill:#e9d5ff,stroke:#a855f7,stroke-width:3px,color:#000
-    classDef state fill:#fde68a,stroke:#f59e0b,stroke-width:2px,color:#000
+flowchart TD
+    classDef ui fill:#4ade80,stroke:#16a34a,stroke-width:2px,color:#000
+    classDef api fill:#60a5fa,stroke:#2563eb,stroke-width:2px,color:#000
+    classDef gnode fill:#f9a8d4,stroke:#ec4899,stroke-width:2px,color:#000
+    classDef errn fill:#fca5a5,stroke:#ef4444,stroke-width:2px,color:#000
+    classDef llm fill:#c084fc,stroke:#9333ea,stroke-width:2px,color:#000
+    classDef db fill:#7dd3fc,stroke:#0ea5e9,stroke-width:2px,color:#000
+    classDef se fill:#e9d5ff,stroke:#a855f7,stroke-width:3px,color:#000
 
-    %% ═══════════════════════════════════════════════════════════════
-    %% ENTRY POINTS — Two UI paths into the same pipeline
-    %% ═══════════════════════════════════════════════════════════════
-
-    subgraph ENTRY["Entry Points"]
+    %% ── Layer 1: Frontend ──
+    subgraph FE["Frontend — React + TailwindCSS"]
         direction LR
+        D["Dashboard View<br/>Filters, Users, Properties,<br/>Generate Email"]:::ui
+        C["Chat View<br/>Natural language input"]:::ui
+    end
 
-        subgraph DASH_ENTRY["Dashboard Path"]
+    %% ── Layer 2: REST API ──
+    subgraph API["FastAPI REST API — Port 8000"]
+        direction LR
+        subgraph SQL_EP["Direct SQL Endpoints"]
             direction TB
-            D_FILTERS[Filter Panel<br/>City, State, Price, Type, Segment]:::frontend
-            D_SEARCH[Search Users → Select User<br/>→ View Properties]:::frontend
-            D_GEN[Generate Email Button<br/>POST /api/campaign/generate-email]:::frontend
-            D_FILTERS --> D_SEARCH --> D_GEN
+            A1["GET /filters"]:::api
+            A2["POST /users"]:::api
+            A3["GET /users/:id/profile"]:::api
+            A4["POST /users/:id/listings"]:::api
+            A5["POST /save-email"]:::api
         end
-
-        subgraph CHAT_ENTRY["Chat Path"]
+        subgraph LG_EP["LangGraph Endpoints"]
             direction TB
-            C_INPUT[Chat Input<br/>Natural language message]:::frontend
-            C_SEND[Send Message<br/>POST /api/chat/message]:::frontend
-            C_INPUT --> C_SEND
-        end
-
-        subgraph INVOKE_ENTRY["MLflow Path"]
-            direction TB
-            I_INPUT[POST /invocations<br/>MLflow-compatible]:::api
+            G1["POST /generate-email<br/>source=dashboard"]:::api
+            G2["POST /chat/message<br/>source=chat"]:::api
+            G3["POST /invocations<br/>MLflow"]:::api
         end
     end
 
-    %% ═══════════════════════════════════════════════════════════════
-    %% LangGraph StateGraph — Central Orchestration
-    %% ═══════════════════════════════════════════════════════════════
-
-    subgraph GRAPH["LangGraph StateGraph — campaign_graph"]
+    %% ── Layer 3: LangGraph ──
+    subgraph LG["LangGraph StateGraph — 6 Nodes"]
         direction TB
+        S(["START"]):::se
+        P1["1. process_input<br/>Dashboard: use user_id<br/>Chat: regex + LLM extraction<br/>→ fetch user profile"]:::gnode
+        P2["2. retrieve_candidates<br/>Dashboard: use properties_input<br/>Chat: query recommendations table"]:::gnode
+        P3["3. rank_and_select<br/>Dashboard: pass-through<br/>Chat: sort by score, top 5"]:::gnode
+        P4["4. enrich_context<br/>Fetch last 20 browsing<br/>activities (both paths)"]:::gnode
+        P5["5. generate_email<br/>Build prompt → Claude LLM<br/>→ parse subject/html/text"]:::gnode
+        ERR["6. handle_error<br/>Format error for<br/>dashboard or chat"]:::errn
+        E(["END"]):::se
 
-        %% State schema
-        STATE["CampaignState\n─────────────────────\nInput: user_id, city, state,\nraw_message, source, properties_input\n─────────────────────\nIntermediate: user_profile, candidates,\nselected_properties, browsing_context\n─────────────────────\nOutput: generated_email,\nchat_response, error"]:::state
-
-        START(["▶ START"]):::startend
-
-        %% ── Node 1: process_input ──
-        subgraph N1["process_input"]
-            direction TB
-            N1_DASH["Dashboard: use user_id directly"]:::node_ok
-            N1_CHAT["Chat: regex → LLM fallback\nto extract user_id from raw_message"]:::node_ok
-            N1_COMMON["Fetch user profile from\nusers table via _execute_sql"]:::node_ok
-            N1_DASH --- N1_COMMON
-            N1_CHAT --- N1_COMMON
-        end
-
-        %% ── Node 2: retrieve_candidates ──
-        subgraph N2["retrieve_candidates"]
-            direction TB
-            N2_DASH["Dashboard: skip DB query,\nuse properties_input from UI"]:::node_ok
-            N2_CHAT["Chat: query recommendations\ntable with optional city/state filter"]:::node_ok
-        end
-
-        %% ── Node 3: rank_and_select ──
-        subgraph N3["rank_and_select"]
-            direction TB
-            N3_DASH["Dashboard: pass-through\n(already selected by user)"]:::node_ok
-            N3_CHAT["Chat: sort by\nrecommendation_score DESC,\npick top 5"]:::node_ok
-        end
-
-        %% ── Node 4: enrich_context ──
-        N4["enrich_context\n─────────────\nFetch last 20 browsing\nactivities for personalization\n(same for both paths)"]:::node_ok
-
-        %% ── Node 5: generate_email ──
-        subgraph N5["generate_email"]
-            direction TB
-            N5_BUILD["Build prompt via\nemail_generator.py:\nbuild_properties_section\nbuild_browsing_section\nformat_email_prompt"]:::node_ok
-            N5_LLM["Invoke Claude Sonnet 4.6\nvia ChatDatabricks"]:::node_ok
-            N5_PARSE["Parse response →\nsubject, html, plain_text"]:::node_ok
-            N5_CHAT_RESP["Chat: also build\nchat_response summary"]:::node_ok
-            N5_BUILD --> N5_LLM --> N5_PARSE --> N5_CHAT_RESP
-        end
-
-        %% ── Node 6: handle_error ──
-        N6["handle_error\n─────────────\nDashboard: return error detail\nChat: set chat_response\nwith error message"]:::node_err
-
-        FINISH(["■ END"]):::startend
-
-        %% ── Graph edges ──
-        START --> N1
-        N1 -->|ok| N2
-        N1 -->|error| N6
-        N2 --> N3
-        N3 -->|ok| N4
-        N3 -->|error| N6
-        N4 --> N5
-        N5 --> FINISH
-        N6 --> FINISH
+        S --> P1
+        P1 -->|ok| P2
+        P1 -.->|error| ERR
+        P2 --> P3
+        P3 -->|ok| P4
+        P3 -.->|error| ERR
+        P4 --> P5
+        P5 --> E
+        ERR --> E
     end
 
-    %% ═══════════════════════════════════════════════════════════════
-    %% External Services
-    %% ═══════════════════════════════════════════════════════════════
-
-    subgraph LLM_LAYER["AI / LLM Layer"]
-        LLM[Claude Sonnet 4.6<br/>databricks-claude-sonnet-4-6<br/>Foundation Model API]:::llm
-    end
-
-    subgraph DATA_LAYER["Data Layer — Unity Catalog"]
+    %% ── Layer 4: External Services ──
+    subgraph EXT["External Services"]
         direction LR
-
-        subgraph DELTA["Delta Tables (serverless_stable_14ey07_catalog.xome)"]
-            direction TB
-            TBL1[users · 500 rows]:::data
-            TBL2[properties · 1,000 rows]:::data
-            TBL3[browsing_activity · 10,000 rows]:::data
-            TBL4[recommendations · 5,000 rows]:::data
+        LLM["Claude Sonnet 4.6<br/>Foundation Model API"]:::llm
+        subgraph UC["Unity Catalog — Delta Tables"]
+            direction LR
+            T1["users<br/>500"]:::db
+            T2["properties<br/>1K"]:::db
+            T3["browsing<br/>10K"]:::db
+            T4["recommendations<br/>5K"]:::db
         end
-
-        VOL[UC Volume\ncampaign_emails]:::data
+        VOL["UC Volume<br/>campaign_emails"]:::db
     end
 
-    %% ═══════════════════════════════════════════════════════════════
-    %% Output — What comes back to the user
-    %% ═══════════════════════════════════════════════════════════════
-
-    subgraph OUTPUT["Output"]
+    %% ── Layer 5: Output ──
+    subgraph OUT["Output"]
         direction LR
-        OUT_DASH["Dashboard:\nEmail Preview Panel\n(HTML / Plain Text tabs)"]:::frontend
-        OUT_CHAT["Chat:\nAssistant message +\nInline Email Preview +\nSidebar Preview"]:::frontend
-        OUT_SAVE["Save to Volume\nPOST /api/campaign/save-email"]:::api
+        O1["Dashboard<br/>Email Preview + Save"]:::ui
+        O2["Chat<br/>Reply + Inline Email"]:::ui
     end
 
-    %% ═══════════════════════════════════════════════════════════════
-    %% Connections
-    %% ═══════════════════════════════════════════════════════════════
-
-    %% Entry → Graph
-    D_GEN -->|"source=dashboard\nuser_id + properties_input"| START
-    C_SEND -->|"source=chat\nraw_message"| START
-    I_INPUT -->|"source=chat\nraw_message"| START
-
-    %% Graph nodes → Data Layer
-    N1_COMMON -->|"SELECT ... FROM users"| TBL1
-    N2_CHAT -->|"SELECT ... FROM\nrecommendations JOIN properties"| TBL4
-    N2_CHAT -->|JOIN| TBL2
-    N4 -->|"SELECT ... FROM\nbrowsing_activity JOIN properties"| TBL3
-
-    %% Graph → LLM
-    N5_LLM --> LLM
-
-    %% Graph → Output
-    FINISH -->|Dashboard| OUT_DASH
-    FINISH -->|Chat| OUT_CHAT
-    OUT_DASH --> OUT_SAVE
-
-    %% Save → Volume
-    OUT_SAVE --> VOL
-
-    %% ── Non-graph REST endpoints (direct SQL, not through LangGraph) ──
-    D_FILTERS -.->|"GET /filters\nGET /users/:id/profile\nPOST /users\nPOST /users/:id/listings"| DELTA
-
-    %% Styling subgraphs
-    class ENTRY container
-    class GRAPH container
-    class LLM_LAYER llm
-    class DATA_LAYER data
-    class OUTPUT container
+    %% ── Connections ──
+    D -->|"user_id + properties"| G1
+    D -.->|"browse data"| SQL_EP
+    C -->|"raw_message"| G2
+    G1 --> S
+    G2 --> S
+    G3 --> S
+    P1 --> T1
+    P2 --> T4
+    P4 --> T3
+    P5 --> LLM
+    SQL_EP --> UC
+    E -->|dashboard| O1
+    E -->|chat| O2
+    O1 -->|save| VOL
