@@ -73,21 +73,26 @@ async def process_input(state: CampaignState) -> dict:
     if not user_id:
         return {"error": "No user_id provided."}
 
-    # Fetch user profile
-    profile_rows = _execute_sql(f"""
-        SELECT user_id, first_name, last_name, email, phone,
-               preferred_city, preferred_state, budget_min, budget_max,
-               preferred_property_type, preferred_beds_min,
-               signup_date, is_active, user_segment
-        FROM {CATALOG}.{SCHEMA}.users
-        WHERE user_id = '{user_id}'
-        LIMIT 1
-    """)
+    # Skip DB query if user_profile was provided by the frontend (dashboard path)
+    existing_profile = state.get("user_profile")
+    if existing_profile:
+        result: dict = {"user_id": user_id}
+    else:
+        # Fetch user profile from DB (chat path)
+        profile_rows = _execute_sql(f"""
+            SELECT user_id, first_name, last_name, email, phone,
+                   preferred_city, preferred_state, budget_min, budget_max,
+                   preferred_property_type, preferred_beds_min,
+                   signup_date, is_active, user_segment
+            FROM {CATALOG}.{SCHEMA}.users
+            WHERE user_id = '{user_id}'
+            LIMIT 1
+        """)
 
-    if not profile_rows:
-        return {"error": f"User {user_id} not found."}
+        if not profile_rows:
+            return {"error": f"User {user_id} not found."}
 
-    result: dict = {"user_id": user_id, "user_profile": profile_rows[0]}
+        result = {"user_id": user_id, "user_profile": profile_rows[0]}
     if city:
         result["city"] = city
     if st:

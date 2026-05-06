@@ -38,9 +38,9 @@ flowchart TD
         subgraph LG["StateGraph — 6 Nodes"]
             direction TB
             S(["START"]):::pt
-            P1["1. process_input<br/>Extract user_id, fetch profile<br/>reads: users"]:::gn
-            P2["2. retrieve_candidates<br/>Get recommended properties<br/>reads: recommendations, properties"]:::gn
-            P3["3. rank_and_select<br/>Sort by score, pick top N"]:::gn
+            P1["1. process_input<br/>Dashboard: use profile from UI<br/>Chat: fetch from users table"]:::gn
+            P2["2. retrieve_candidates<br/>Dashboard: use properties from UI<br/>Chat: query recommendations"]:::gn
+            P3["3. rank_and_select<br/>Dashboard: pass-through<br/>Chat: sort + pick top N"]:::gn
             P4["4. enrich_context<br/>Fetch browsing history<br/>reads: browsing_activity"]:::gn
             P5["5. generate_email<br/>Prompt → Claude → parse"]:::gn
             ERR["6. handle_error<br/>Format error response"]:::er
@@ -78,7 +78,7 @@ flowchart TD
     end
 
     %% ── Vertical flow ──
-    D -->|"user_id + properties"| G1
+    D -->|"user_id + profile + properties"| G1
     D -.->|"filters, users, listings"| SQL_EP
     C -->|"raw_message"| G2
     G1 & G2 & G3 --> S
@@ -89,8 +89,8 @@ flowchart TD
     O1 -->|save| VOL
     O1 -->|"track sent"| T5
 
-    %% ── Data reads ──
-    P1 -.-> T1
-    P2 -.-> T3
+    %% ── Data reads (chat path only for P1, P2) ──
+    P1 -.->|"chat only"| T1
+    P2 -.->|"chat only"| T3
     P4 -.-> T4
     A4 -.->|"LEFT JOIN"| T5

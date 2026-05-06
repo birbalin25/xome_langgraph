@@ -129,18 +129,18 @@ export default function AppShell() {
   const selectedProperties = properties.filter((p) => selectedPropertyIds.has(p.property_id));
 
   const handleGenerateEmail = useCallback(async () => {
-    if (!selectedUserId || selectedProperties.length === 0) return;
+    if (!selectedUserId || selectedProperties.length === 0 || !userProfile) return;
     setGenerating(true);
     setSavedPath("");
     try {
-      const result = await api.generateEmail(selectedUserId, selectedProperties);
+      const result = await api.generateEmail(selectedUserId, selectedProperties, userProfile);
       setEmail(result);
     } catch (err) {
       console.error("Failed to generate email", err);
     } finally {
       setGenerating(false);
     }
-  }, [selectedUserId, selectedProperties]);
+  }, [selectedUserId, selectedProperties, userProfile]);
 
   // ── Save email ──────────────────────────────
   const handleSaveEmail = useCallback(async () => {

@@ -56,12 +56,13 @@ export async function fetchListings(
 
 export async function generateEmail(
   userId: string,
-  properties: Property[]
+  properties: Property[],
+  userProfile: UserProfile
 ): Promise<GeneratedEmail> {
   const res = await fetch(`${BASE}/generate-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_id: userId, properties }),
+    body: JSON.stringify({ user_id: userId, properties, user_profile: userProfile }),
   });
   return json(res);
 }

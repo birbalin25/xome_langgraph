@@ -39,6 +39,7 @@ class ListingsRequest(BaseModel):
 class GenerateEmailRequest(BaseModel):
     user_id: str
     properties: list[dict]
+    user_profile: Optional[dict] = None
 
 
 class SaveEmailRequest(BaseModel):
@@ -198,11 +199,14 @@ async def generate_email_endpoint(req: GenerateEmailRequest):
     from agent_server.graph import campaign_graph
 
     try:
-        result = await campaign_graph.ainvoke({
+        invoke_input: dict = {
             "user_id": req.user_id,
             "properties_input": req.properties,
             "source": "dashboard",
-        })
+        }
+        if req.user_profile:
+            invoke_input["user_profile"] = req.user_profile
+        result = await campaign_graph.ainvoke(invoke_input)
 
         if result.get("error"):
             raise HTTPException(status_code=400, detail=result["error"])
