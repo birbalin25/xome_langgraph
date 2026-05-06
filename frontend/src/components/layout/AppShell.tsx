@@ -173,22 +173,16 @@ export default function AppShell() {
       {/* Main content */}
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-7xl space-y-4">
-          {/* User dropdown + inline profile */}
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
-            <div className="min-w-0 flex-1">
-              <UserDropdown
-                users={users}
-                selectedId={selectedUserId}
-                onSelect={handleSelectUser}
-                loading={usersLoading}
-              />
-            </div>
-            {userProfile && (
-              <div className="shrink-0 lg:w-80">
-                <UserProfileCard profile={userProfile} />
-              </div>
-            )}
-          </div>
+          {/* User dropdown */}
+          <UserDropdown
+            users={users}
+            selectedId={selectedUserId}
+            onSelect={handleSelectUser}
+            loading={usersLoading}
+          />
+
+          {/* User profile banner */}
+          {userProfile && <UserProfileCard profile={userProfile} />}
 
           {/* Property grid */}
           <div>
