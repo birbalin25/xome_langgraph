@@ -204,9 +204,31 @@ export default function AppShell() {
 
           {/* Property grid */}
           <div>
-            <h2 className="mb-3 text-lg font-semibold text-gray-800">
-              Top Recommended Listings
-            </h2>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-800">
+                Top Recommended Listings
+              </h2>
+              {properties.length > 0 && (
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={properties.length > 0 && selectedPropertyIds.size === properties.length}
+                    ref={(el) => {
+                      if (el) el.indeterminate = selectedPropertyIds.size > 0 && selectedPropertyIds.size < properties.length;
+                    }}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedPropertyIds(new Set(properties.map((p) => p.property_id)));
+                      } else {
+                        setSelectedPropertyIds(new Set());
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-gray-300 text-xome-600 accent-xome-600"
+                  />
+                  Select All ({selectedPropertyIds.size}/{properties.length})
+                </label>
+              )}
+            </div>
             <PropertyGrid
               properties={properties}
               loading={propsLoading}
