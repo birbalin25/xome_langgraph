@@ -10,12 +10,14 @@ An AI-powered real estate campaign platform that generates personalized emails p
 
 ### Dashboard Mode
 
-1. Use the **filter sidebar** to narrow down by city, state, price range, property type, or buyer segment
+1. Use the **filter sidebar** to narrow down by city, state, price range, property type, buyer segment, and **top listings count** (1–30)
 2. Click **Search Users** to find matching high-intent buyers (top 20)
-3. Select a user from the dropdown — their profile and top 5 recommended properties load automatically
-4. Click **Generate Email** — the LangGraph pipeline runs (process_input → retrieve_candidates → rank_and_select → enrich_context → generate_email) and Claude Sonnet 4.6 generates a personalized HTML email
-5. Preview the email (HTML or plain text), click property links to see detail modals
-6. Click **Save to Volume** to persist the email as a `.txt` file in Unity Catalog
+3. Select a user from the dropdown — their profile banner and recommended properties load automatically
+4. **Click properties to select/deselect** them (all selected by default, with a "Select All" checkbox). Only selected properties are included in the campaign email
+5. Click **Generate Email** — the LangGraph pipeline runs with the user profile and selected properties already passed from the UI (no redundant DB queries), fetches browsing history for personalization, and Claude Sonnet 4.6 generates a personalized HTML email
+6. Preview the email (HTML or plain text), click property links to see detail modals
+7. Click **Save to Volume** to persist the email as a `.txt` file in Unity Catalog and record each property in the `campaign_tracking` table
+8. Properties that have been sent in a campaign display a **"Campaign sent on {date}"** banner
 
 ### Chat Mode
 
@@ -57,13 +59,14 @@ An AI-powered real estate campaign platform that generates personalized emails p
     Claude Sonnet 4.6    Delta Tables          UC Volume
     (Foundation Model)   (users, properties,   (campaign_emails)
                          recommendations,
-                         browsing_activity)
+                         browsing_activity,
+                         campaign_tracking)
 ```
 
 The app runs as a **single process** — FastAPI on port 8000 serves both the pre-built React frontend (from `frontend/dist/`) and all API endpoints. This is required because Databricks Apps only exposes one port.
 
-**Dashboard call chain:** `React UI → campaign_api.py → LangGraph (source=dashboard) → email_generator.py → Claude LLM`
-**Chat call chain:** `React UI → chat_api.py → LangGraph (source=chat) → email_generator.py → Claude LLM`
+**Dashboard call chain:** `React UI → campaign_api.py → LangGraph (source=dashboard, profile+properties from UI) → email_generator.py → Claude LLM`
+**Chat call chain:** `React UI → chat_api.py → LangGraph (source=chat, fetches profile+properties from DB) → email_generator.py → Claude LLM`
 
 ---
 
@@ -73,10 +76,10 @@ Both Dashboard and Chat modes share the same `StateGraph`:
 
 | Node | Purpose | Dashboard | Chat |
 |------|---------|-----------|------|
-| `process_input` | Extract user_id, fetch profile | Uses provided `user_id` | Parses `raw_message` via regex/LLM fallback |
-| `retrieve_candidates` | Fetch recommended properties | Uses `properties_input` from UI | Full DB query with optional city/state filter |
-| `rank_and_select` | Sort by score, pick top 5 | Pass-through (already selected) | Full sort |
-| `enrich_context` | Fetch last 20 browsing activities | Same for both | Same for both |
+| `process_input` | Extract user_id, fetch profile | **Skips DB query** — uses `user_profile` from UI | Parses `raw_message` via regex/LLM fallback, fetches profile from DB |
+| `retrieve_candidates` | Fetch recommended properties | **Skips DB query** — uses `properties_input` from UI | Full DB query with optional city/state filter |
+| `rank_and_select` | Sort by score, pick top N | **Pass-through** (already selected by user in UI) | Full sort, pick top N |
+| `enrich_context` | Fetch last 20 browsing activities | DB query (only node that reads from DB) | Same — DB query |
 | `generate_email` | Call Claude LLM | Returns email result | Also builds `chat_response` summary |
 | `handle_error` | Format error message | Returns error detail | Sets `chat_response` with error |
 
@@ -166,9 +169,9 @@ FastAPI `APIRouter` with prefix `/api/campaign`:
 | `GET` | `/filters` | Distinct cities, states, property types, segments, price ranges |
 | `POST` | `/users` | Top 20 users matching filters (joined with recommendation counts) |
 | `GET` | `/users/{id}/profile` | Full user profile |
-| `POST` | `/users/{id}/listings` | Top 5 recommended properties (optional city/state filter) |
-| `POST` | `/generate-email` | Generate campaign email via LangGraph (source=dashboard) |
-| `POST` | `/save-email` | Save email to UC Volume |
+| `POST` | `/users/{id}/listings` | Top N recommended properties with campaign tracking status (configurable 1–30, LEFT JOIN campaign_tracking) |
+| `POST` | `/generate-email` | Generate campaign email via LangGraph (source=dashboard, accepts user_profile + properties from UI) |
+| `POST` | `/save-email` | Save email to UC Volume + insert tracking rows into campaign_tracking |
 
 ### Chat API (`chat_api.py`)
 
@@ -210,16 +213,18 @@ Module for prompt construction and LLM invocation:
 ┌───────────────────────────────────────────────────────────┐
 │  Header: Xome Campaign Platform    [Dashboard] [Chat]      │
 ├──────────────┬────────────────────────────────────────────┤
-│ FILTERS      │ [User Dropdown ▼]     [User Profile Card] │
+│ FILTERS      │ [User Dropdown ▼]                          │
+│              │ [User Profile Banner — name, segment,      │
+│ City    [▼]  │  email, location, budget, preferences]     │
+│ State   [▼]  │────────────────────────────────────────────│
+│ Price [═══]  │ Top Recommended Listings    [☑ Select All] │
+│ Listings[══] │ ┌─────────┐ ┌─────────┐ ┌─────────┐      │
+│ Type    [▼]  │ │ ☑ Card  │ │ ☑ Card  │ │ ☐ Card  │      │
+│ Segment [▼]  │ └─────────┘ └─────────┘ └─────────┘      │
+│              │ ┌─────────┐ ┌─────────┐                    │
+│ [Search      │ │ ☑ Card  │ │ ☑ Card  │  (click to        │
+│  Users]      │ └─────────┘ └─────────┘   select/deselect) │
 │              │────────────────────────────────────────────│
-│ City    [▼]  │ Top Recommended Listings                   │
-│ State   [▼]  │ ┌────────┐ ┌────────┐ ┌────────┐         │
-│ Price [═══]  │ │  Card  │ │  Card  │ │  Card  │         │
-│ Type    [▼]  │ └────────┘ └────────┘ └────────┘         │
-│ Segment [▼]  │ ┌────────┐ ┌────────┐                     │
-│              │ │  Card  │ │  Card  │                     │
-│ [Search      │ └────────┘ └────────┘                     │
-│  Users]      │────────────────────────────────────────────│
 │              │ [Generate Email] [Save to Volume]          │
 │              │ Email Preview (HTML | Plain Text tabs)     │
 └──────────────┴────────────────────────────────────────────┘
@@ -269,7 +274,16 @@ browsing_activity (10,000)     recommendations (5,000)
   ├── activity_type              ├── recommendation_score (0.0-1.0)
   ├── session_duration           ├── recommendation_reason
   └── device_type, referral      └── model_version, is_active
+
+campaign_tracking
+  FK: user_id -> users
+  FK: property_id -> properties
+  ├── recommendation_id
+  ├── campaign_date (DATE)
+  └── campaign_status (BOOLEAN)
 ```
+
+The `campaign_tracking` table is created automatically at app startup. It records which user+property combinations have been sent in campaign emails. The listings endpoint LEFT JOINs this table to show "Campaign sent on {date}" banners in the UI.
 
 All tables are stored as Delta tables in Unity Catalog: `serverless_stable_14ey07_catalog.xome.*`
 
@@ -415,4 +429,6 @@ Generates 4 Delta tables using Faker with:
 
 ## GitHub
 
-Repository: https://github.com/birbalin25/xome_first
+Repositories:
+- https://github.com/birbalin25/xome_first
+- https://github.com/birbalin25/xome_langgraph
