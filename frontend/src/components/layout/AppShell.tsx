@@ -172,10 +172,10 @@ export default function AppShell() {
 
       {/* Main content */}
       <main className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-7xl space-y-6">
-          {/* User dropdown + profile */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div className="lg:col-span-2">
+        <div className="mx-auto max-w-7xl space-y-4">
+          {/* User dropdown + inline profile */}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+            <div className="min-w-0 flex-1">
               <UserDropdown
                 users={users}
                 selectedId={selectedUserId}
@@ -184,7 +184,7 @@ export default function AppShell() {
               />
             </div>
             {userProfile && (
-              <div>
+              <div className="shrink-0 lg:w-80">
                 <UserProfileCard profile={userProfile} />
               </div>
             )}
