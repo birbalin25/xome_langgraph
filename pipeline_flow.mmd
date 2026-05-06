@@ -10,7 +10,7 @@ flowchart TD
     %% ── Frontend ──
     subgraph FE["Frontend — React + TailwindCSS"]
         direction LR
-        D["Dashboard View<br/>Filters → Users → Properties<br/>→ Generate Email"]:::ui
+        D["Dashboard View<br/>Filters → Users → Select Properties<br/>→ Generate Email"]:::ui
         C["Chat View<br/>Natural language input"]:::ui
     end
 
@@ -40,7 +40,7 @@ flowchart TD
             S(["START"]):::pt
             P1["1. process_input<br/>Extract user_id, fetch profile<br/>reads: users"]:::gn
             P2["2. retrieve_candidates<br/>Get recommended properties<br/>reads: recommendations, properties"]:::gn
-            P3["3. rank_and_select<br/>Sort by score, pick top 5"]:::gn
+            P3["3. rank_and_select<br/>Sort by score, pick top N"]:::gn
             P4["4. enrich_context<br/>Fetch browsing history<br/>reads: browsing_activity"]:::gn
             P5["5. generate_email<br/>Prompt → Claude → parse"]:::gn
             ERR["6. handle_error<br/>Format error response"]:::er
@@ -65,6 +65,7 @@ flowchart TD
             T2["properties · 1K"]:::db
             T3["recommendations · 5K"]:::db
             T4["browsing · 10K"]:::db
+            T5["campaign_tracking"]:::db
             VOL["Volume: campaign_emails"]:::db
         end
     end
@@ -86,8 +87,10 @@ flowchart TD
     EN -->|dashboard| O1
     EN -->|chat| O2
     O1 -->|save| VOL
+    O1 -->|"track sent"| T5
 
     %% ── Data reads ──
     P1 -.-> T1
     P2 -.-> T3
     P4 -.-> T4
+    A4 -.->|"LEFT JOIN"| T5
