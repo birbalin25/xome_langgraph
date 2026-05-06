@@ -177,7 +177,7 @@ async def get_user_listings(user_id: str, req: ListingsRequest):
         AND ct.campaign_status = true
     WHERE {where_str}
     ORDER BY r.recommendation_score DESC
-    LIMIT 5
+    LIMIT 10
     """
     try:
         rows = _execute_sql(query)
