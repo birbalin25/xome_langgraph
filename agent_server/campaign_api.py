@@ -168,13 +168,17 @@ async def get_user_listings(user_id: str, req: ListingsRequest):
            p.listing_status, p.days_on_market,
            p.auction_date, p.auction_start_price,
            p.hoa_fee, p.description, p.image_url,
-           ct.campaign_date AS campaign_sent_date
+           ct.campaign_sent_date
     FROM {CATALOG}.{SCHEMA}.recommendations r
     JOIN {CATALOG}.{SCHEMA}.properties p ON r.property_id = p.property_id
-    LEFT JOIN {CATALOG}.{SCHEMA}.campaign_tracking ct
+    LEFT JOIN (
+        SELECT user_id, property_id, MAX(campaign_date) AS campaign_sent_date
+        FROM {CATALOG}.{SCHEMA}.campaign_tracking
+        WHERE campaign_status = true
+        GROUP BY user_id, property_id
+    ) ct
         ON ct.user_id = r.user_id
         AND ct.property_id = p.property_id
-        AND ct.campaign_status = true
     WHERE {where_str}
     ORDER BY r.recommendation_score DESC
     LIMIT 10
