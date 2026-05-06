@@ -45,6 +45,7 @@ class SaveEmailRequest(BaseModel):
     subject: str
     html: str
     plain_text: str
+    properties: list[dict] = []
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -166,9 +167,14 @@ async def get_user_listings(user_id: str, req: ListingsRequest):
            p.year_built, p.school_rating, p.neighborhood,
            p.listing_status, p.days_on_market,
            p.auction_date, p.auction_start_price,
-           p.hoa_fee, p.description, p.image_url
+           p.hoa_fee, p.description, p.image_url,
+           ct.campaign_date AS campaign_sent_date
     FROM {CATALOG}.{SCHEMA}.recommendations r
     JOIN {CATALOG}.{SCHEMA}.properties p ON r.property_id = p.property_id
+    LEFT JOIN {CATALOG}.{SCHEMA}.campaign_tracking ct
+        ON ct.user_id = r.user_id
+        AND ct.property_id = p.property_id
+        AND ct.campaign_status = true
     WHERE {where_str}
     ORDER BY r.recommendation_score DESC
     LIMIT 5
@@ -219,6 +225,23 @@ async def save_email(req: SaveEmailRequest):
             contents=io.BytesIO(content.encode("utf-8")),
             overwrite=True,
         )
+
+        # Insert campaign tracking rows for each property
+        if req.properties:
+            value_rows = []
+            for prop in req.properties:
+                pid = prop.get("property_id", "")
+                rid = prop.get("recommendation_id", "")
+                value_rows.append(
+                    f"('{req.user_id}', '{pid}', '{rid}', current_date(), true)"
+                )
+            insert_sql = (
+                f"INSERT INTO {CATALOG}.{SCHEMA}.campaign_tracking "
+                f"(user_id, property_id, recommendation_id, campaign_date, campaign_status) "
+                f"VALUES {', '.join(value_rows)}"
+            )
+            _execute_sql(insert_sql)
+
         return {"path": volume_path, "filename": filename}
     except Exception as e:
         logger.exception("Failed to save email to Volume")

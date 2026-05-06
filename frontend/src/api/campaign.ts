@@ -71,6 +71,7 @@ export async function saveEmail(payload: {
   subject: string;
   html: string;
   plain_text: string;
+  properties: Array<{ property_id: string; recommendation_id?: string }>;
 }): Promise<{ path: string; filename: string }> {
   const res = await fetch(`${BASE}/save-email`, {
     method: "POST",

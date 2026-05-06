@@ -107,6 +107,15 @@ export default function PropertyCard({ property: p }: PropertyCardProps) {
             </p>
           </div>
         )}
+
+        {/* Campaign sent banner */}
+        {p.campaign_sent_date && (
+          <div className="mt-3 rounded-md bg-blue-50 p-2 text-xs">
+            <p className="font-semibold text-blue-700">
+              Campaign sent on {formatDate(p.campaign_sent_date)}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -44,6 +44,7 @@ export interface Property {
   recommendation_score?: string;
   recommendation_reason?: string;
   generated_at?: string;
+  campaign_sent_date?: string | null;
 }
 
 export interface FilterOptions {

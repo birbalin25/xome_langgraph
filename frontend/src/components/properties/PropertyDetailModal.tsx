@@ -140,6 +140,15 @@ export default function PropertyDetailModal({ property: p, onClose }: PropertyDe
             </div>
           )}
 
+          {/* Campaign sent banner */}
+          {p.campaign_sent_date && (
+            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
+              <p className="text-sm font-semibold text-blue-700">
+                Campaign sent on {formatDate(p.campaign_sent_date)}
+              </p>
+            </div>
+          )}
+
           {/* Description */}
           {p.description && (
             <div className="mt-4">

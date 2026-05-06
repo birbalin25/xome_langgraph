@@ -136,14 +136,24 @@ export default function AppShell() {
         subject: email.subject,
         html: email.html,
         plain_text: email.plain_text,
+        properties: properties.map((p) => ({
+          property_id: p.property_id,
+          recommendation_id: p.recommendation_id,
+        })),
       });
       setSavedPath(result.path);
+
+      // Optimistically update properties with today's campaign date
+      const today = new Date().toISOString().split("T")[0];
+      setProperties((prev) =>
+        prev.map((p) => ({ ...p, campaign_sent_date: p.campaign_sent_date ?? today }))
+      );
     } catch (err) {
       console.error("Failed to save email", err);
     } finally {
       setSaving(false);
     }
-  }, [email, selectedUserId]);
+  }, [email, selectedUserId, properties]);
 
   return (
     <div className="flex h-[calc(100vh-64px)]">

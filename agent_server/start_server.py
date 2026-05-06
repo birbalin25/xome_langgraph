@@ -1,3 +1,5 @@
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -12,8 +14,32 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 
 from agent_server.campaign_api import router as campaign_router  # noqa: E402
 from agent_server.chat_api import router as chat_router  # noqa: E402
+from agent_server.config import CATALOG, SCHEMA  # noqa: E402
+from agent_server.tools import _execute_sql  # noqa: E402
 
-app = FastAPI(title="Xome Campaign Platform")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create campaign_tracking table on startup if it doesn't exist."""
+    try:
+        _execute_sql(f"""
+            CREATE TABLE IF NOT EXISTS {CATALOG}.{SCHEMA}.campaign_tracking (
+                user_id STRING,
+                property_id STRING,
+                recommendation_id STRING,
+                campaign_date DATE,
+                campaign_status BOOLEAN
+            )
+        """)
+        logger.info("campaign_tracking table ready")
+    except Exception:
+        logger.exception("Failed to create campaign_tracking table")
+    yield
+
+
+app = FastAPI(title="Xome Campaign Platform", lifespan=lifespan)
 app.include_router(campaign_router)
 app.include_router(chat_router)
 
